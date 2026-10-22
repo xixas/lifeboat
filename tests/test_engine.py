@@ -205,7 +205,8 @@ def test_rclone_config_and_password_command_are_injected(make_cfg, tmp_path):
     cfg = make_cfg()
     cfg.rclone_config = "~/x.conf"
     cfg.password_command = "echo pw"
-    assert engine.rclone_argv(cfg, ["lsf"])[:3] == ["rclone", "--config", str(__import__("os").path.expanduser("~/x.conf"))]
+    argv = engine.rclone_argv(cfg, ["lsf"])
+    assert argv[:4] == ["rclone", "--ask-password=false", "--config", str(__import__("os").path.expanduser("~/x.conf"))]
     assert engine.rclone_env(cfg)["RCLONE_PASSWORD_COMMAND"] == "echo pw"
 
 

@@ -76,7 +76,9 @@ def rclone_env(cfg: Config) -> dict:
 
 
 def rclone_argv(cfg: Config, args: list[str]) -> list[str]:
-    argv = ["rclone"]
+    # Never prompt: an encrypted rclone.conf without password_command must fail fast
+    # (timers and the GUI have no terminal), not wait on stdin.
+    argv = ["rclone", "--ask-password=false"]
     if cfg.rclone_config:
         argv += ["--config", os.path.expanduser(cfg.rclone_config)]
     return argv + list(args)

@@ -9,7 +9,7 @@ from gi.repository import Adw, Gtk  # noqa: E402
 
 from lifeboat.engine import parse_time  # noqa: E402
 
-ICONS = {"ok": "emblem-ok-symbolic", "warn": "dialog-warning-symbolic", "error": "dialog-error-symbolic"}
+ICONS = {"ok": "object-select-symbolic", "warn": "dialog-warning-symbolic", "error": "dialog-error-symbolic"}
 CSS = {"ok": "success", "warn": "warning", "error": "error"}
 WORDS = {"ok": "OK", "warn": "Needs attention", "error": "Failed"}
 

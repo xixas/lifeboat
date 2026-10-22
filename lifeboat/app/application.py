@@ -56,6 +56,8 @@ class App(Adw.Application):
         """Debug mode: visit every page once, optionally saving a PNG of each, then quit."""
         seq = []
 
+        # Each step waits for its own snapshot before moving on, so a slow (retrying)
+        # snapshot can never capture the next page under this page's name.
         def step():
             if not seq:
                 seq.extend(w.page_ids() + [None])
@@ -64,9 +66,8 @@ class App(Adw.Application):
                 self.quit()
                 return False
             w.show_page(pid)
-            if SNAP:
-                GLib.timeout_add(600, snap, pid)
-            return True
+            GLib.timeout_add(600, snap, pid) if SNAP else GLib.timeout_add_seconds(1, step)
+            return False
 
         def snap(pid, tries=0):
             p = Gtk.WidgetPaintable.new(w)
@@ -76,11 +77,13 @@ class App(Adw.Application):
             if node is None and tries < 8:  # nothing drawn yet; try again shortly
                 GLib.timeout_add(400, snap, pid, tries + 1)
                 return False
-            r = w.get_renderer()
-            if r is None:  # Broadway has no GL renderer; fall back to cairo
-                r = Gsk.CairoRenderer()
-                r.realize(w.get_surface())
-            r.render_texture(node, None).save_to_png(f"{SNAP}/lifeboat-{pid}.png")
+            if node is not None:
+                r = w.get_renderer()
+                if r is None:  # Broadway has no GL renderer; fall back to cairo
+                    r = Gsk.CairoRenderer()
+                    r.realize(w.get_surface())
+                r.render_texture(node, None).save_to_png(f"{SNAP}/lifeboat-{pid}.png")
+            GLib.idle_add(step)
             return False
 
-        GLib.timeout_add_seconds(3, lambda: GLib.timeout_add_seconds(1, step) and False)
+        GLib.timeout_add_seconds(3, lambda: step() and False)

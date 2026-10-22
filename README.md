@@ -37,6 +37,20 @@ a D-Bus service and the icon. It never touches your config or timers. Make sure 
 
 `settings.command` and `rclone.password_command` run as shell commands from your own config — only put commands there you trust.
 
+### Optional: back up your dotfiles too
+
+Lifeboat backs up folders. For settings scattered around `~` (shell, git, editor configs), use the optional
+`[settings] command`: Lifeboat runs it before every backup and shows its result on the *Settings snapshot* page.
+Any script works. With [chezmoi](https://www.chezmoi.io/) and a private git repo, for example:
+
+```toml
+[settings]
+command = "chezmoi re-add && chezmoi git -- add -A && chezmoi git -- commit -qm 'snapshot' ; chezmoi git -- push -q"
+```
+
+chezmoi is not required by Lifeboat; without a settings command that step is simply skipped. A built-in settings
+backup (a list of files saved as one versioned bundle) is planned.
+
 ## Command line
 
 | Command | Does |

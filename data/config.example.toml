@@ -1,0 +1,37 @@
+# Lifeboat config. Save as ~/.config/lifeboat/config.toml
+# Remote names below ("gdrive:", "gdrive-crypt:") are examples: create them with `rclone config`.
+
+[rclone]
+config = ""             # optional path to an rclone.conf; "" = rclone's default
+password_command = ""   # optional, only if your rclone.conf is encrypted, e.g.
+                        # "timeout 30 secret-tool lookup service rclone account config"
+
+[schedule]
+daily_at = "13:00"      # used by `lifeboat install-timer`
+keep_days = 90          # old versions older than this are deleted by `lifeboat prune`
+
+# One [[jobs]] block per backup set.
+[[jobs]]
+name = "documents"
+source = "~/Documents"
+dest = "gdrive:Backup/Documents"      # any rclone remote:path
+old = "gdrive:Backup/_old"            # replaced/deleted files go to <old>/<timestamp>/<name>
+exclude = [".venv/**", "node_modules/**", "__pycache__/**"]
+# include = []                        # optional rclone include patterns
+# filter_file = ""                    # optional rclone --filter-from file (relative to this config's folder)
+encrypted = false
+
+# An encrypted set: "gdrive-crypt:" is a crypt remote layered over gdrive: (rclone config -> crypt).
+# [[jobs]]
+# name = "private"
+# source = "~/Private"
+# dest = "gdrive-crypt:Private"
+# old = "gdrive-crypt:_old"
+# encrypted = true                    # display only; encryption comes from the remote
+
+[settings]
+# Optional step that runs before the jobs, e.g. a script that snapshots your dotfiles.
+command = ""
+
+[modules]
+claude_skills = "auto"  # auto | on | off. "auto" shows the Skills page only if ~/.claude/skills exists

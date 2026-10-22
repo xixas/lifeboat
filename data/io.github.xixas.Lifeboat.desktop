@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Lifeboat
+Comment=See what is backed up and restore it
+Exec=lifeboat
+Icon=io.github.xixas.Lifeboat
+Categories=Utility;System;
+DBusActivatable=true
+X-GNOME-UsesNotifications=true
+StartupNotify=true

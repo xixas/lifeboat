@@ -34,6 +34,11 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
-      - uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7 # v2.3.9
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      # The gitleaks binary, pinned and hash-checked. (gitleaks-action fails on a
+      # repo's first push: it scans from the root commit's nonexistent parent.)
+      - name: Scan full history for secrets
+        run: |
+          curl -fsSLO https://github.com/gitleaks/gitleaks/releases/download/v8.23.3/gitleaks_8.23.3_linux_x64.tar.gz
+          echo "73a35edc2285afd689e712b8e0ebad3f2eaf94b0d67cd6e1f0ec693ac751bb4a  gitleaks_8.23.3_linux_x64.tar.gz" | sha256sum -c -
+          tar -xzf gitleaks_8.23.3_linux_x64.tar.gz gitleaks
+          ./gitleaks git . --redact --no-banner --exit-code 1

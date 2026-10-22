@@ -17,9 +17,9 @@ def cmd_run(a) -> int:
     cfg = _load()
     if a.settings_only:
         return 0 if engine.run_settings(cfg, emit=print) else 1
-    st = engine.run_backup(cfg, dry_run=a.dry_run, emit=print)
+    st = engine.run_backup(cfg, dry_run=a.dry_run, emit=print, settings=not a.no_settings)
     snap = engine.read_json(engine.state_dir() / "settings.json")
-    settings_ok = a.dry_run or not cfg.settings_command or bool(snap and snap.get("ok"))
+    settings_ok = a.dry_run or a.no_settings or not cfg.settings_command or bool(snap and snap.get("ok"))
     return 0 if st["ok"] and settings_ok else 1
 
 
@@ -91,6 +91,7 @@ def parser() -> argparse.ArgumentParser:
     s = sub.add_parser("run", help="run the settings command and every backup job")
     s.add_argument("--dry-run", action="store_true", help="ask rclone what it would do; change nothing")
     s.add_argument("--settings-only", action="store_true", help="only run the [settings] command")
+    s.add_argument("--no-settings", action="store_true", help="skip the [settings] command, run only the jobs")
     s.set_defaults(fn=cmd_run)
     sub.add_parser("prune", help="delete old versions past keep_days").set_defaults(fn=cmd_prune)
     s = sub.add_parser("status", help="show the current state")

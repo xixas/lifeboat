@@ -238,6 +238,9 @@ class Win(PagesMixin, Adw.ApplicationWindow):
 
         try:
             launcher = Gio.SubprocessLauncher.new(Gio.SubprocessFlags.STDOUT_PIPE | Gio.SubprocessFlags.STDERR_MERGE)
+            # A piped Python child block-buffers stdout, so the dialog would stay empty until
+            # the end; unbuffered output streams each line as it happens.
+            launcher.setenv("PYTHONUNBUFFERED", "1", True)
             for k, v in (env or {}).items():
                 launcher.setenv(k, v, True)
             proc = launcher.spawnv(argv)

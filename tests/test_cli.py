@@ -35,3 +35,14 @@ def test_missing_config_exits_2(env, capsys):
 
 def test_state_dir_follows_xdg(env):
     assert engine.state_dir() == env / "state" / "lifeboat"
+
+
+def test_no_settings_skips_the_settings_command(env, make_cfg):
+    cfg = write_cfg(env, make_cfg)
+    marker = env / "settings-ran"
+    cfg.path.write_text(f'[settings]\ncommand = "touch {marker}"\n\n' + cfg.path.read_text())
+    (env / "src" / "f").write_text("1")
+    assert cli.main(["run", "--no-settings"]) == 0
+    assert not marker.exists()
+    assert cli.main(["run"]) == 0
+    assert marker.exists()

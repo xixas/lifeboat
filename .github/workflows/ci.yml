@@ -1,0 +1,40 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install rclone (pinned, checksum verified)
+        run: |
+          v=v1.74.3
+          f=rclone-$v-linux-amd64.zip
+          curl -fsSLO "https://downloads.rclone.org/$v/$f"
+          curl -fsSLO "https://downloads.rclone.org/$v/SHA256SUMS"
+          grep " $f\$" SHA256SUMS | sha256sum -c -
+          unzip -q "$f"
+          sudo install -m 0755 "rclone-$v-linux-amd64/rclone" /usr/local/bin/rclone
+          rclone version
+      - run: pip install pytest ruff
+      - run: ruff check .
+      - run: pytest -q
+
+  gitleaks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: gitleaks/gitleaks-action@v2.3.9
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -5,10 +5,6 @@ question: **is this laptop safe to lose?** It is a small GTK 4 + libadwaita app 
 config file. Anything a backup replaces or deletes is moved aside into a timestamped folder, so you can restore
 old versions too.
 
-![Overview](docs/screenshots/overview.png)
-
-<!-- screenshot placeholder: add docs/screenshots/overview.png -->
-
 **Status: early, personal-scale.** It is used daily by its author on one laptop. Expect rough edges; there is no
 setup wizard yet (you edit a TOML file).
 
@@ -39,6 +35,8 @@ a D-Bus service and the icon. It never touches your config or timers. Make sure 
 3. `lifeboat run --dry-run`, then `lifeboat run`.
 4. `lifeboat install-timer` to back up daily.
 
+`settings.command` and `rclone.password_command` run as shell commands from your own config — only put commands there you trust.
+
 ## Command line
 
 | Command | Does |
@@ -58,7 +56,7 @@ a D-Bus service and the icon. It never touches your config or timers. Make sure 
 Each job runs `rclone sync SOURCE DEST --backup-dir OLD/<timestamp>/<job>`. The destination mirrors the source;
 files that were changed or removed are moved into the timestamp folder instead of being lost. `prune` deletes
 timestamp folders older than `keep_days`, judged by the folder name (not file age). `restore` uses `rclone copy`
-into a folder you choose, so it never overwrites your live files. State (`last-run.json`, `prune.json`,
+into a separate folder by default; if you choose an existing folder, files in it can be overwritten. State (`last-run.json`, `prune.json`,
 `settings.json`, `run.log`) lives in `$XDG_STATE_HOME/lifeboat` (default `~/.local/state/lifeboat`).
 
 See [docs/usage.md](docs/usage.md) for the full guide.

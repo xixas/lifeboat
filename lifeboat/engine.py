@@ -127,6 +127,13 @@ def job_args(cfg: Config, job: Job, stamp: str) -> list[str]:
     return args
 
 
+def has_files(path: str) -> bool:
+    """True if path is a directory holding at least one regular file (guards against syncing an empty mount)."""
+    if not os.path.isdir(path):
+        return False
+    return any(files for _root, _dirs, files in os.walk(path))
+
+
 def run_settings(cfg: Config, emit: Emit | None = None) -> bool:
     """Run the optional settings-snapshot command and record settings.json. True if ok or not configured."""
     if not cfg.settings_command:
@@ -152,8 +159,16 @@ def run_backup(cfg: Config, dry_run: bool = False, now: datetime | None = None, 
     with open(state_dir() / "run.log", "a" if ran_settings else "w") as log:
         for job in cfg.jobs:
             t0 = time.monotonic()
-            args = job_args(cfg, job, stamp) + COMMON + (["--dry-run"] if dry_run else [])
-            rc = stream(rclone_argv(cfg, args), env, log, emit)
+            src = os.path.expanduser(job.source)
+            if not has_files(src):
+                msg = f"{job.name}: refusing to sync: source {src} is missing or empty (unmounted drive or typo?) — nothing was changed"
+                log.write(msg + "\n")
+                if emit:
+                    emit(msg)
+                rc = 2
+            else:
+                args = job_args(cfg, job, stamp) + COMMON + (["--dry-run"] if dry_run else [])
+                rc = stream(rclone_argv(cfg, args), env, log, emit)
             results.append({"name": job.name, "rc": rc, "seconds": int(time.monotonic() - t0)})
             line = f"{job.name} rc={rc}"
             log.write(line + "\n")

@@ -20,6 +20,7 @@ def test_defaults():
     ({"jobs": [JOB, JOB]}, "used twice"),
     ({"jobs": [{**JOB, "old": "r:a"}]}, "jobs[1].old"),
     ({"jobs": [{**JOB, "exclude": "x"}]}, "jobs[1].exclude"),
+    ({"jobs": [{**JOB, "include": ["a"], "exclude": ["b"]}]}, "include and exclude cannot be combined"),
     ({"jobs": [{**JOB, "encrypted": "yes"}]}, "jobs[1].encrypted"),
     ({"jobs": [{**JOB, "colour": 1}]}, "jobs[1].colour"),
     ({"jobs": [JOB], "schedule": {"daily_at": "25:00"}}, "schedule.daily_at"),

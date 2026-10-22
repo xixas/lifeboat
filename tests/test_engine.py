@@ -183,6 +183,7 @@ def test_status_and_problems_flag_failure_and_staleness(tmp_path, make_cfg, cloc
 
 def test_dry_run_only_does_not_count_as_a_backup(make_cfg, tmp_path, clock):
     cfg = make_cfg()
+    (tmp_path / "src" / "a.txt").write_text("one")
     engine.run_backup(cfg, dry_run=True, now=clock())
     assert engine.status(cfg)["status"]["backups"] == "warn"
 
@@ -218,3 +219,28 @@ def test_unit_files(make_cfg):
     assert "RandomizedDelaySec=10min" in u["lifeboat.timer"]
     assert " run\n" in u["lifeboat.service"] and "ExecStopPost=-" in u["lifeboat.service"]
     assert "prune" in u["lifeboat-prune.service"] and "OnCalendar=weekly" in u["lifeboat-prune.timer"]
+
+
+def test_unit_files_quote_paths_with_spaces(make_cfg, monkeypatch, tmp_path):
+    monkeypatch.setattr(timer.shutil, "which", lambda n: None)
+    fake = tmp_path / "my checkout" / "lifeboat" / "timer.py"
+    monkeypatch.setattr(timer, "__file__", str(fake))
+    monkeypatch.setattr(timer.sys, "executable", "/opt/py thon/bin/python3")
+    svc = timer.unit_files(make_cfg())["lifeboat.service"]
+    assert f'Environment="PYTHONPATH={tmp_path / "my checkout"}"' in svc
+    assert 'ExecStart="/opt/py thon/bin/python3" -m lifeboat run' in svc
+    assert 'ExecStopPost=-"/opt/py thon/bin/python3" -m lifeboat check' in svc
+
+
+def test_empty_or_missing_source_is_refused(tmp_path, make_cfg, clock):
+    cfg = make_cfg()
+    src = tmp_path / "src"
+    (src / "a.txt").write_text("one")
+    assert engine.run_backup(cfg, now=clock(0))["ok"]
+    (src / "a.txt").unlink()
+    (src / "sub").mkdir()
+    st = engine.run_backup(cfg, now=clock(60))
+    assert st["ok"] is False and st["jobs"][0]["rc"] == 2
+    assert (tmp_path / "dest" / "a.txt").read_text() == "one"
+    assert stamps(tmp_path / "old") == []
+    assert "refusing to sync" in (engine.state_dir() / "run.log").read_text()

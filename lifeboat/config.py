@@ -136,6 +136,8 @@ def parse(data: dict, path: Path | None = None) -> Config:
             filter_file=_get(raw, where, "filter_file", str, ""),
             encrypted=_get(raw, where, "encrypted", bool, False),
         )
+        if job.include and job.exclude:
+            raise ConfigError(f"{where} ({job.name!r}): include and exclude cannot be combined (rclone does not support mixing them)")
         if not NAME_RE.match(job.name):
             raise ConfigError(f"{where}.name may only use letters, digits, '.', '_' and '-', got {job.name!r}")
         if job.name in seen:

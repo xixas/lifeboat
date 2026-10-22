@@ -16,19 +16,24 @@ def unit_dir() -> Path:
     return Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "systemd" / "user"
 
 
+def q(path: str) -> str:
+    """Double-quote a path for a systemd command line or Environment= value."""
+    return '"' + str(path).replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
 def launcher() -> tuple[str, str]:
     """(command line, extra [Service] lines) that start lifeboat from systemd."""
     exe = shutil.which("lifeboat")
     if exe:
-        return exe, ""
+        return q(exe), ""
     root = Path(__file__).resolve().parent.parent
-    return f"{sys.executable} -m lifeboat", f"Environment=PYTHONPATH={root}\n"
+    return f'{q(sys.executable)} -m lifeboat', f'Environment="PYTHONPATH={root}"\n'
 
 
 def unit_files(cfg: Config) -> dict[str, str]:
     cmd, env = launcher()
     nm = shutil.which("nm-online")
-    pre = f"ExecStartPre=-{nm} -q -t 120\n" if nm else ""
+    pre = f"ExecStartPre=-{q(nm)} -q -t 120\n" if nm else ""
     return {
         "lifeboat.service": (
             "[Unit]\nDescription=Lifeboat backup\n\n"

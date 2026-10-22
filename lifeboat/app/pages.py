@@ -12,6 +12,9 @@ from gi.repository import Adw, GLib, Gtk  # noqa: E402
 from lifeboat import APP_ID, engine, timer  # noqa: E402
 from lifeboat.app.widgets import CSS, ICONS, WORDS, ago, fmt_time, group, label, row  # noqa: E402
 
+# pinned: never run an unpinned latest from npm
+SKILLS_CLI = "skills@1.7.4"
+
 PAGE_ICONS = {"overview": "go-home-symbolic", "backups": "folder-remote-symbolic", "restore": "document-revert-symbolic",
               "settings": "document-save-symbolic", "skills": "starred-symbolic", "help": "help-about-symbolic",
               "prefs": "emblem-system-symbolic"}
@@ -208,7 +211,7 @@ class PagesMixin:
                      or [row("None")]))
         if shutil.which("npx"):
             pg.add(group(rows=[self._box([self.button("Update external skills", lambda: self.stream(
-                "Update external skills", ["sh", "-c", "npx -y skills update -g </dev/null"]))])]))
+                "Update external skills", ["sh", "-c", f"npx -y {SKILLS_CLI} update -g </dev/null"]))])]))
         pg.add(group(f"Yours · {len(sk['own'])}", rows=[row(", ".join(sk["own"]) or "None")]))
         return pg
 

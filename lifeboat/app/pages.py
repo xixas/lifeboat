@@ -76,7 +76,7 @@ class PagesMixin:
             snap = S["settings"]["last"]
             rows.append(self.status_row("Settings snapshot", f"Last snapshot {ago(snap['time'])}" if snap else "Never run", st["settings"]))
         pg.add(group(rows=rows))
-        pg.add(group(rows=[self._box([self.button("Back up now", lambda: self.run_cli("Back up now", "run"), ("pill", "suggested-action"))])]))
+        pg.add(group(rows=[self._box([self.button("Back up now", self.run_backup, ("pill", "suggested-action"))])]))
         return pg
 
     # -- backups
@@ -109,7 +109,7 @@ class PagesMixin:
                 r.add_prefix(Gtk.Image.new_from_icon_name("system-lock-screen-symbolic"))
             jr.append(r)
         pg.add(group("Jobs", rows=jr))
-        pg.add(group(rows=[self._box([self.button("Back up now", lambda: self.run_cli("Back up now", "run"), ("pill", "suggested-action")),
+        pg.add(group(rows=[self._box([self.button("Back up now", self.run_backup, ("pill", "suggested-action")),
                                       self.button("Dry run", lambda: self.run_cli("Dry run", "run", "--dry-run"))])]))
         pr, ptm = S["prune"], S["timers"]["lifeboat-prune"]
         pg.add(group("Safety net", rows=[

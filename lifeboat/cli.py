@@ -29,8 +29,12 @@ def _load() -> Config:
 
 
 def _emit(a):
-    """Where human and rclone output goes: stdout, or stderr when stdout carries JSON."""
-    return (lambda line: print(line, file=sys.stderr)) if a.json else print
+    """Where human and rclone output goes: stdout, or stderr when stdout carries JSON or events."""
+    return (lambda line: print(line, file=sys.stderr)) if a.json or getattr(a, "events", False) else print
+
+
+def _event(doc: dict) -> None:
+    print(json.dumps(doc), flush=True)
 
 
 def _dump(doc) -> None:
@@ -44,12 +48,16 @@ def cmd_run(a) -> int:
         if a.json:
             _dump({"settings_ok": ok})
         return 0 if ok else 1
-    st = engine.run_backup(cfg, dry_run=a.dry_run, emit=_emit(a), settings=not a.no_settings)
+    st = engine.run_backup(cfg, dry_run=a.dry_run, emit=_emit(a), settings=not a.no_settings,
+                           on_event=_event if a.events else None)
     snap = engine.read_json(engine.state_dir() / "settings.json")
     settings_ok = a.dry_run or a.no_settings or not cfg.settings_command or bool(snap and snap.get("ok"))
     if a.json:
         _dump({**st, "settings_ok": bool(settings_ok)})
-    return 0 if st["ok"] and settings_ok else 1
+    ok = st["ok"] and settings_ok
+    if a.events:
+        _event({"event": "done", "ok": bool(ok)})
+    return 0 if ok else 1
 
 
 def cmd_prune(a) -> int:
@@ -247,7 +255,10 @@ def parser() -> argparse.ArgumentParser:
     s.add_argument("--dry-run", action="store_true", help="ask rclone what it would do; change nothing")
     s.add_argument("--settings-only", action="store_true", help="only run the [settings] command")
     s.add_argument("--no-settings", action="store_true", help="skip the [settings] command, run only the jobs")
-    s.add_argument("--json", action="store_true", help="print the result as JSON on stdout (other output goes to stderr)")
+    out = s.add_mutually_exclusive_group()
+    out.add_argument("--json", action="store_true", help="print the result as JSON on stdout (other output goes to stderr)")
+    out.add_argument("--events", action="store_true",
+                     help="print progress as JSON lines on stdout (other output goes to stderr)")
     s.set_defaults(fn=cmd_run)
     s = sub.add_parser("prune", help="delete old versions past keep_days")
     s.add_argument("--json", action="store_true", help="print the result as JSON")

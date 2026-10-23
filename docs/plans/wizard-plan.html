@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="en" data-theme="light" data-lavish-annotate="on">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lifeboat wizard plan</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/daisyui@5.5.19/daisyui.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/daisyui@5.5.19/themes.css">
+<script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4.2.4/dist/index.global.js"></script>
+<style>
+  *, *::before, *::after { box-sizing: border-box; }
+  :where(.grid, .flex) > * { min-width: 0; }
+  :where(p, li, td, th) { overflow-wrap: anywhere; }
+  code { font-size: .85em; background: var(--color-base-200); padding: .05em .35em; border-radius: .25rem; }
+  svg text { font-family: ui-sans-serif, system-ui, sans-serif; font-size: 12px; fill: var(--color-base-content); }
+</style>
+</head>
+<body class="bg-base-100 text-base-content">
+<main class="max-w-5xl mx-auto px-4 py-8 space-y-8">
+
+<header class="space-y-2">
+  <div class="badge badge-soft badge-info">Plan · Lifeboat setup + restore wizards · 2026-10-23</div>
+  <h1 class="text-3xl font-bold">Setup and restore wizards</h1>
+  <p class="text-lg">Goal: a stranger installs Lifeboat, clicks through a few standard GNOME screens and is backed up, with no rclone, no TOML. On a new laptop the same app brings everything back. Screens follow the mockups (<code>~/.lavish/lifeboat-mockups.html</code>), rebuilt with stock libadwaita widgets the way Pika Backup and Secrets do it.</p>
+  <div role="alert" class="alert alert-info alert-soft text-sm"><span><b>Done when:</b> on a clean Fedora and Ubuntu 24.04 VM-like container, the setup wizard signs in (real Google login once, by you), creates the remotes, backs up two folders + encrypted keys, writes the recovery-kit PDF; then the restore wizard on a second clean HOME finds that backup, accepts the passphrase, rejects a wrong one, and restores the files; and a <b>second laptop</b> set up on the same account backs up next to the first without touching its files. CI covers everything except the real Google login.</span></div>
+</header>
+
+<section class="space-y-3">
+  <h2 class="text-xl font-semibold">How it fits together</h2>
+  <svg viewBox="0 0 900 230" class="w-full border border-base-300 rounded-box" role="img" aria-label="Wizard architecture">
+    <defs><marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0 0L10 5L0 10z" fill="currentColor"/></marker></defs>
+    <g fill="none" stroke="currentColor" stroke-opacity=".5"><rect x="15" y="20" width="200" height="190" rx="10"/><rect x="260" y="20" width="250" height="190" rx="10"/><rect x="555" y="20" width="160" height="190" rx="10"/><rect x="755" y="20" width="130" height="190" rx="10"/></g>
+    <text x="30" y="42" font-weight="bold">GTK wizard (app/)</text>
+    <text x="30" y="68">Adw.Dialog</text><text x="30" y="86">+ NavigationView pages</text>
+    <text x="30" y="112">StatusPage · SwitchRow</text><text x="30" y="130">PasswordEntryRow · Banner</text>
+    <text x="30" y="156">Gtk.FileDialog folders</text><text x="30" y="182">no logic, calls setup.py</text>
+    <text x="275" y="42" font-weight="bold">lifeboat/setup.py (new, no GTK)</text>
+    <text x="275" y="68">signin(): rclone authorize, drive.file</text><text x="275" y="86">make_remotes(): drive + crypt</text>
+    <text x="275" y="104">suggest_folders(): XDG dirs + sizes</text><text x="275" y="122">write_config(): reuses add_job_text</text>
+    <text x="275" y="140">kit_pdf(): stdlib PDF writer</text><text x="275" y="158">find_backup() / check_passphrase()</text>
+    <text x="275" y="182" opacity=".7">unit-tested with a fake rclone</text>
+    <text x="570" y="42" font-weight="bold">engine.py</text><text x="570" y="68">run_backup() +</text><text x="570" y="86">upload manifest to</text><text x="570" y="104">Lifeboat/.lifeboat/</text><text x="570" y="130">restore() as today</text>
+    <text x="770" y="42" font-weight="bold">Drive</text><text x="770" y="68">Lifeboat/</text><text x="770" y="86"> &lt;device&gt;/</text><text x="770" y="104">  Documents …</text><text x="770" y="122">  manifest.json</text><text x="770" y="140"> secure/&lt;device&gt;/</text><text x="770" y="158"> (one passphrase</text><text x="770" y="176">  per account)</text>
+    <g stroke="currentColor" stroke-width="1.4" marker-end="url(#a)"><line x1="215" y1="115" x2="255" y2="115"/><line x1="510" y1="115" x2="550" y2="115"/><line x1="715" y1="115" x2="750" y2="115"/></g>
+  </svg>
+  <p class="text-sm">All decisions and rclone calls live in a new GTK-free module, so the CLI could grow <code>lifeboat setup</code> later and tests run in CI without a display. The wizard is a thin view.</p>
+</section>
+
+<section class="space-y-3">
+  <h2 class="text-xl font-semibold">One account, several laptops</h2>
+  <p class="text-sm">Each laptop gets its own folder, <code>Lifeboat/&lt;device&gt;/</code> (device = host name, editable in setup), with its own <code>manifest.json</code>. Encrypted data lives under <code>Lifeboat/secure/&lt;device&gt;/</code> behind <b>one passphrase per Google account</b>. Without this, a second laptop's daily sync would move the first laptop's files into old versions and prune would delete them. Your current hand-made layout (<code>Lifeboat/Documents</code>) keeps working; the wizard only ever creates the per-device layout.</p>
+  <p class="text-sm">After sign-in, setup always looks for existing manifests. If any exist it asks: <b>Restore from &lt;device&gt;</b> or <b>Add this laptop</b> (asks for the existing passphrase and checks it, never mints a second one).</p>
+</section>
+
+<section class="space-y-3">
+  <h2 class="text-xl font-semibold">The flows (GNOME patterns)</h2>
+  <div class="grid md:grid-cols-2 gap-4 text-sm">
+    <div class="card card-border"><div class="card-body">
+      <h3 class="font-semibold">Setup — shown instead of "Create example config"</h3>
+      <ol class="list-decimal pl-5 space-y-1">
+        <li><b>Welcome</b> StatusPage: "Set up backup" (suggested, pill) / "Restore from a backup".</li>
+        <li><b>Sign in</b>: button opens Google in the browser (Gtk.UriLauncher); spinner + Cancel while waiting; Banner on failure or timeout.</li>
+        <li><b>What to back up</b>: SwitchRows for XDG folders with sizes (computed in a thread), "Keys and secrets" (<code>~/.ssh</code>, <code>~/.gnupg</code>, always encrypted), "Add a folder…" (FileDialog). Daily time ComboRow.</li>
+        <li><b>Recovery kit</b>: generated passphrase (6×5 chars), Save PDF (outside backed-up folders; the kit name is excluded from every job) / Copy (clipboard cleared after 30 s), "I've stored it" check enables Next. The kit also lists the client ID and manual-decrypt steps, so the backup stays readable even if Lifeboat or its Google project disappears.</li>
+        <li><b>Backing up</b>: progress dialog (existing stream view), then "You're covered" StatusPage. Timer installed.</li>
+      </ol>
+    </div></div>
+    <div class="card card-border"><div class="card-body">
+      <h3 class="font-semibold">Restore — from Welcome or the Restore page</h3>
+      <ol class="list-decimal pl-5 space-y-1">
+        <li><b>Sign in</b> (same as setup).</li>
+        <li><b>Found a backup</b>: reads <code>Lifeboat/.lifeboat/manifest.json</code> (host name, last run, jobs). None found → StatusPage explaining why.</li>
+        <li><b>Passphrase</b>: PasswordEntryRow; checked by reading a probe file through the crypt remote (a wrong one fails clearly — rclone's root listing would wrongly succeed).</li>
+        <li><b>Choose what to restore</b>: CheckButton rows per job, target = original folders. Restore never deletes and never overwrites a newer local file (<code>--update</code>); <code>~/.ssh</code> and <code>~/.gnupg</code> get 700/600 permissions back (Drive does not store them).</li>
+        <li><b>Restoring</b> → "All done", config + remotes written so backups continue on this laptop.</li>
+      </ol>
+    </div></div>
+  </div>
+</section>
+
+<section class="space-y-3">
+  <h2 class="text-xl font-semibold">Build slices</h2>
+  <div class="overflow-x-auto rounded-box border border-base-300"><table class="table table-sm">
+    <thead><tr><th>#</th><th>Slice</th><th>Ships as</th><th>Test</th></tr></thead>
+    <tbody>
+      <tr><td>0</td><td>Ubuntu 24.04 fix: spinner fallback, README states libadwaita ≥ 1.5</td><td><b>shipped as 0.3.2</b></td><td>unit test + e2e</td></tr>
+      <tr><td>1</td><td><b>Real Google login first</b> (you, ~5 min, into a throwaway Drive folder): capture rclone's real sign-in output as a test fixture</td><td>—</td><td>fixture file</td></tr>
+      <tr><td>2</td><td>Per-device layout + manifest + probe file, written each run</td><td><code>feat:</code></td><td>engine tests with local remotes, two "devices"</td></tr>
+      <tr><td>3</td><td><code>setup.py</code>: sign-in (drive.file forced, parse URL + token from the fixture, cancel, timeout, port busy), discovery, remotes, folder suggestions, config writer, passphrase check, restore with <code>--update</code> + permissions, PDF kit</td><td><code>feat:</code></td><td>fake <code>rclone</code> for sign-in; real rclone with local + crypt remotes for the rest</td></tr>
+      <tr><td>4</td><td>Setup wizard UI (incl. "Add this laptop" branch)</td><td><code>feat:</code></td><td>Broadway walk-through with browser and file picker stubbed</td></tr>
+      <tr><td>5</td><td>Restore wizard UI</td><td><code>feat:</code></td><td>same, plus wrong passphrase and two-device paths</td></tr>
+      <tr><td>6</td><td>End-to-end on your account in the throwaway folder, then release 0.4.0</td><td>release PR</td><td>scripted checklist</td></tr>
+    </tbody>
+  </table></div>
+  <p class="text-sm">Fable audits slices 1–2 (they touch remotes, secrets and your Drive) and the finished UI before the release. Your real setup is never touched by tests: everything runs in throwaway HOMEs; the real-login check uses a Drive folder named <code>Lifeboat-test</code>.</p>
+</section>
+
+<section class="space-y-3">
+  <h2 class="text-xl font-semibold">Risks and guards</h2>
+  <div class="overflow-x-auto rounded-box border border-base-300"><table class="table table-sm">
+    <thead><tr><th>Risk</th><th>Guard</th></tr></thead>
+    <tbody>
+      <tr><td>rclone's default sign-in asks for <b>full Drive</b> access</td><td>Force <code>drive.file</code> via env; a test asserts the scope in the auth URL</td></tr>
+      <tr><td>Token output format of <code>rclone authorize</code> not yet seen with a real login</td><td>Parser tolerant to the documented block; slice 5 verifies before release</td></tr>
+      <tr><td>Fixed callback port 53682 (another rclone sign-in running)</td><td>Detect, show "close the other sign-in and retry"</td></tr>
+      <tr><td>drive.file only sees files made by this exact client ID — changing it orphans every backup</td><td>Client ID is a constant with a "never change" comment; maintainer note in CONTRIBUTING</td></tr>
+      <tr><td>Your Google project lost or deleted → nobody can read their backup through Lifeboat</td><td>Second project owner + deletion lien (you, 5 min in Cloud Console); recovery kit lists the client ID and a "download from drive.google.com, decrypt locally with rclone + passphrase" path, which works even without the project</td></tr>
+      <tr><td>Wrong passphrase looks OK at the crypt root</td><td>Probe file check</td></tr>
+      <tr><td>pycairo missing on Debian/Ubuntu/Arch</td><td>Stdlib PDF writer, no dependency</td></tr>
+      <tr><td>Wizard run on a laptop that already has a config (like yours)</td><td>Wizard only appears when there is no config; never overwrites one</td></tr>
+      <tr><td>Two laptops on one account delete each other's files</td><td>Per-device folders and manifests (see above)</td></tr>
+      <tr><td>"Set up" on an account that already has backups mints a second passphrase</td><td>Discovery after sign-in; "Add this laptop" reuses and verifies the existing one</td></tr>
+      <tr><td>Recovery kit backed up in plain text, or left in clipboard history</td><td>Kit file excluded from all jobs; clipboard cleared after 30 s</td></tr>
+      <tr><td>Restore overwrites newer files or breaks <code>~/.ssh</code></td><td><code>--update</code>; permissions fixed after restore</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<section class="space-y-3">
+  <h2 class="text-xl font-semibold">Decisions (made by Fable on the owner's request, 2026-10-23)</h2>
+  <div class="overflow-x-auto rounded-box border border-base-300"><table class="table table-sm">
+    <thead><tr><th>Decision</th><th>Pick</th><th>Why / condition</th></tr></thead>
+    <tbody>
+      <tr><td>Google client</td><td>Ship the <code>lifeboat-app</code> client ID + secret in the code</td><td>Installed-app secrets aren't confidential; drive.file needs no Google verification. Constant marked "never change"; never rotate the secret in Cloud Console (it would orphan every backup).</td></tr>
+      <tr><td>Ubuntu 24.04</td><td>Keep supporting it</td><td>Spinner fallback shipped in 0.3.2; every wizard widget exists in libadwaita 1.5. CI runs on ubuntu-latest (24.04).</td></tr>
+      <tr><td>"Settings" row</td><td>Leave out of v1</td><td>A partial dotfile list under-delivers on the word "Settings"; restoring <code>~/.config</code> across app versions is untested. Revisit in 0.5 with the list visible in the UI.</td></tr>
+    </tbody>
+  </table></div>
+  <p class="text-sm">Owner, before release: the 5-minute Google login (slice 1), and a second owner + deletion lien on project <code>lifeboat-app</code>.</p>
+</section>
+
+</main>
+</body>
+</html>

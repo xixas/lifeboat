@@ -1,6 +1,6 @@
 Name:           lifeboat
 # x-release-please-start-version
-Version:        0.3.2
+Version:        0.4.0
 # x-release-please-end
 Release:        1%{?dist}
 Summary:        Back up a Linux laptop to Google Drive (or any rclone remote) and see if it is safe to lose

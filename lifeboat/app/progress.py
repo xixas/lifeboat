@@ -124,7 +124,8 @@ class BackupProgress:
         self.list.append(self.finishing.row)
         self.head.set_visible(False)
         self.retry.set_visible(False)
-        self.finished = False
+        self.finished, self.verdict = False, None
+        self.gen = getattr(self, "gen", 0) + 1  # callbacks of the run before this one ignore themselves
         self.progress_btn.set_active(True)
         self._update_title()
 
@@ -162,7 +163,7 @@ class BackupProgress:
             else:
                 self._fail(self.finishing, "Could not save the backup's manifest or passphrase check.", "Could not finish")
         elif kind == "done":
-            self._finish(bool(e.get("ok")))
+            self.verdict = bool(e.get("ok"))  # the run is over when the process is, see _ended
         self._update_title()
 
     def _job_end(self, step, e):
@@ -269,34 +270,46 @@ class BackupProgress:
         dlg.save(self.win, None, done)
 
     # -- process
+    def _spawn(self):
+        launcher = Gio.SubprocessLauncher.new(Gio.SubprocessFlags.STDOUT_PIPE | Gio.SubprocessFlags.STDERR_PIPE)
+        launcher.setenv("PYTHONUNBUFFERED", "1", True)
+        for k, v in self.env.items():
+            launcher.setenv(k, v, True)
+        return launcher.spawnv(self.argv)
+
     def start(self):
         if self.win.busy:
             return
         self.win.set_busy(True)
         self._reset()
+        gen = self.gen
         self.dlg.set_can_close(False)
-        self.progress_btn.set_active(True)
         if self.dlg.get_parent() is None:
             self.dlg.present(self.win)
         try:
-            launcher = Gio.SubprocessLauncher.new(Gio.SubprocessFlags.STDOUT_PIPE | Gio.SubprocessFlags.STDERR_PIPE)
-            launcher.setenv("PYTHONUNBUFFERED", "1", True)
-            for k, v in self.env.items():
-                launcher.setenv(k, v, True)
-            proc = launcher.spawnv(self.argv)
+            proc = self._spawn()
         except GLib.Error as e:
             self.on_log(f"Could not start: {e.message}")
-            self._finish(False, stopped=True)
+            self._ended(gen)
             return
         open_pipes = [2]
 
         def eof():
             open_pipes[0] -= 1
-            if not open_pipes[0]:
-                proc.wait_async(None, lambda p, res: (p.wait_finish(res), self._finish(False, stopped=True)))
+            if not open_pipes[0] and gen == self.gen:
+                proc.wait_async(None, lambda p, res: (p.wait_finish(res), self._ended(gen)))
 
-        read_lines(proc.get_stdout_pipe(), self.on_event, eof)
-        read_lines(proc.get_stderr_pipe(), self.on_log, eof)
+        def current(on_line):
+            return lambda line: on_line(line) if gen == self.gen else None
+
+        read_lines(proc.get_stdout_pipe(), current(self.on_event), eof)
+        read_lines(proc.get_stderr_pipe(), current(self.on_log), eof)
+
+    def _ended(self, gen=None):
+        """The process is gone and both pipes are drained: only now is the run over. A stale run's callback is ignored."""
+        if gen is not None and gen != self.gen:
+            return
+        self._finish(self.verdict is True, stopped=self.verdict is None)
 
 
 def job_names():

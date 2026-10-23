@@ -68,7 +68,7 @@ def test_run_json_stdout_is_one_document(env, make_cfg, capsys):
     cap = capsys.readouterr()
     doc = json.loads(cap.out)
     assert doc["ok"] is True and doc["settings_ok"] is True and doc["jobs"][0]["name"] == "docs"
-    assert "docs rc=0" in cap.err and "rc=" not in cap.out.replace('"rc"', "")
+    assert "Docs  done 1 file" in cap.err and "rc=" not in cap.out.replace('"rc"', "")
 
 
 def test_versions_json(env, make_cfg, capsys):
@@ -284,7 +284,7 @@ def test_run_events_are_json_lines_on_stdout_and_logs_on_stderr(env, make_cfg, c
     events = [json.loads(ln) for ln in cap.out.splitlines()]
     assert [e["event"] for e in events] == ["job_start", "job_end", "done"]
     assert events[1]["files"] == 1 and events[2] == {"event": "done", "ok": True}
-    assert "docs rc=0" in cap.err and "Copied" in cap.err
+    assert "Docs  done 1 file" in cap.err and "copied f (new" in cap.err
 
 
 def test_run_events_done_is_false_when_a_job_fails(env, make_cfg, capsys):

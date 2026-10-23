@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import subprocess
 import time
 from datetime import datetime
@@ -270,7 +271,7 @@ def test_empty_source_with_missing_dest_is_skipped_ok(tmp_path, make_cfg, clock)
     st = engine.run_backup(cfg, now=clock())
     assert st["ok"] and st["jobs"][0]["rc"] == 0 and st["jobs"][0]["skipped"] is True
     log = read(engine.state_dir() / "run.log")
-    assert "docs: skipped — folder is empty, nothing to back up yet" in log and "docs rc=0" in log
+    assert "Docs  skipped, folder is empty, nothing to back up yet" in log and "rc=" not in log
 
 
 def test_a_skipped_job_restores_cleanly_and_skips_again(tmp_path, make_cfg, clock):
@@ -370,7 +371,7 @@ def test_manifest_failure_keeps_job_rc_but_fails_the_run_and_is_a_problem(tmp_pa
     st = engine.run_backup(cfg, now=clock())
     assert st["jobs"][0]["rc"] == 0 and st["ok"] is False
     assert st["manifest"]["ok"] is False and st["manifest"]["rc"] != 0
-    assert "manifest rc=" in (engine.state_dir() / "run.log").read_text()
+    assert "ERROR could not save the list of backed-up folders" in (engine.state_dir() / "run.log").read_text()
     s = engine.status(cfg)
     assert s["manifest"] == st["manifest"]
     assert any("new laptop" in p["body"] for p in engine.problems(cfg, s))
@@ -493,12 +494,12 @@ def test_job_end_carries_skip_and_error_text(tmp_path, make_cfg, clock, monkeypa
     (tmp_path / "src").mkdir()
     (tmp_path / "src" / "a.txt").write_text("one")
 
-    def broken(argv, env, log, emit=None):
-        emit("ERROR : a.txt: Failed to copy: boom")
+    def broken(argv, env, log, emit=None, handle=None):
+        handle(json.dumps({"level": "error", "msg": "Failed to copy: boom", "object": "a.txt", "objectType": "*local.Object"}))
         return 1
     monkeypatch.setattr(engine, "stream", broken)
     engine.run_backup(cfg, now=clock(9), on_event=events.append)
-    assert events[1]["rc"] == 1 and events[1]["error"] == "ERROR : a.txt: Failed to copy: boom"
+    assert events[1]["rc"] == 1 and events[1]["error"] == "a.txt: Failed to copy: boom"
 
 
 def test_manifest_and_probe_are_one_finishing_step(tmp_path, make_cfg, clock):
@@ -550,5 +551,51 @@ def test_job_end_reason_rclone_failure_and_success(tmp_path, make_cfg, clock, mo
     cfg = make_cfg()
     (tmp_path / "src" / "a.txt").write_text("one")
     assert _reason(cfg, clock) == ""
-    monkeypatch.setattr(engine, "stream", lambda argv, env, log, emit=None: 1)
+    monkeypatch.setattr(engine, "stream", lambda argv, env, log, emit=None, handle=None: 1)
     assert _reason(cfg, clock) == "rclone"
+
+
+def test_run_log_is_readable_and_the_same_on_screen_and_in_the_file(tmp_path, make_cfg, clock):
+    cfg = make_cfg(device=device(tmp_path, probe=False))
+    (tmp_path / "src" / "a.txt").write_text("one")
+    (tmp_path / "src" / "sub").mkdir()
+    (tmp_path / "src" / "sub" / "b.txt").write_text("two!")
+    shown = []
+    engine.run_backup(cfg, now=clock(), emit=shown.append)
+    text = read(engine.state_dir() / "run.log")
+    assert text.splitlines() == shown
+    lines = shown
+    assert lines[0].startswith(f"Lifeboat {engine.__version__} · backup of thinkpad · ")
+    assert re.fullmatch(r"\d\d:\d\d:\d\d  Docs  .*src → Google Drive: .*dest", lines[1]), lines[1]
+    assert any(re.fullmatch(r"\d\d:\d\d:\d\d  Docs  copied a.txt \(new, 3 B\)", ln) for ln in lines)
+    assert any(re.fullmatch(r"\d\d:\d\d:\d\d  Docs  done 2 files, 7 B, \d+ s", ln) for ln in lines)
+    assert any("Lifeboat saved the list of backed-up folders" in ln for ln in lines)
+    assert re.fullmatch(r"\d\d:\d\d:\d\d  Finished: backed up 2 files in \d+ s", lines[-1]), lines[-1]
+    assert "rc=" not in text and "modification time" not in text and '{"level"' not in text
+
+
+def test_failed_run_log_ends_with_a_problem_footer(tmp_path, make_cfg, clock):
+    cfg = make_cfg()
+    (tmp_path / "src").rmdir()
+    shown = []
+    engine.run_backup(cfg, now=clock(), emit=shown.append)
+    assert any("ERROR refusing to sync" in ln for ln in shown)
+    assert shown[-1].endswith("Finished with problems: 1 folder not backed up")
+
+
+def test_settings_command_output_is_stamped_not_dropped(tmp_path, make_cfg, clock):
+    cfg = make_cfg()
+    cfg.settings_command = "echo from-settings"
+    (tmp_path / "src" / "a.txt").write_text("one")
+    shown = []
+    engine.run_backup(cfg, now=clock(), emit=shown.append)
+    assert any(re.fullmatch(r"\d\d:\d\d:\d\d  Settings  from-settings", ln) for ln in shown), shown
+
+
+def test_restore_output_is_readable_too(tmp_path, make_cfg, clock):
+    cfg = make_cfg()
+    (tmp_path / "src" / "a.txt").write_text("one")
+    engine.run_backup(cfg, now=clock())
+    shown = []
+    assert engine.restore(cfg, "docs", tmp_path / "out", emit=shown.append) == 0
+    assert any("copied a.txt (new, 3 B)" in ln for ln in shown) and not any(ln.startswith("{") for ln in shown)

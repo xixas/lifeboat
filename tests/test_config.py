@@ -156,3 +156,22 @@ def test_write_config_text_fsyncs_before_replace(tmp_path, monkeypatch):
     p.write_text(BASE)
     write_config_text(p, TWO)
     assert calls.index("fsync") < calls.index("replace")
+
+
+def test_device_table_parses_and_is_optional():
+    assert parse({"jobs": [JOB]}).device_name == "" and parse({"jobs": [JOB]}).manifest == ""
+    cfg = parse({"jobs": [JOB], "device": {"name": "thinkpad", "manifest": "r:L/thinkpad/manifest.json",
+                                           "probe": "rc:thinkpad/.lifeboat-probe"}})
+    assert (cfg.device_name, cfg.manifest, cfg.probe) == ("thinkpad", "r:L/thinkpad/manifest.json", "rc:thinkpad/.lifeboat-probe")
+
+
+@pytest.mark.parametrize("device,key", [
+    ({"name": "bad/name", "manifest": "r:m.json"}, "device.name"),
+    ({"manifest": "r:m.json"}, "device.name"),
+    ({"name": "thinkpad"}, "device.manifest"),
+    ({"name": "thinkpad", "manifest": "r:m.json", "colour": 1}, "device.colour"),
+    ({"name": "thinkpad", "manifest": "r:m.json", "probe": 3}, "device.probe"),
+])
+def test_device_validation_names_the_bad_key(device, key):
+    with pytest.raises(ConfigError, match=key.replace(".", r"\.")):
+        parse({"jobs": [JOB], "device": device})

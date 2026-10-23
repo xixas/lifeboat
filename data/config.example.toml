@@ -29,6 +29,12 @@ encrypted = false
 # old = "gdrive-crypt:_old"
 # encrypted = true                    # display only; encryption comes from the remote
 
+# Written by the setup wizard so a new laptop can find this backup; leave out for hand-made configs.
+# [device]
+# name = "thinkpad"                                          # shown in the restore wizard
+# manifest = "gdrive:Lifeboat/thinkpad/manifest.json"        # this device's manifest (plain JSON, no secrets)
+# probe = "gdrive-crypt:thinkpad/.lifeboat-probe"            # optional; lets a passphrase be checked on restore
+
 [settings]
 # Optional step that runs before the jobs, e.g. a script that snapshots your dotfiles.
 command = ""

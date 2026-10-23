@@ -1,4 +1,5 @@
 import json
+import subprocess
 from datetime import datetime
 
 import pytest
@@ -244,3 +245,99 @@ def test_empty_or_missing_source_is_refused(tmp_path, make_cfg, clock):
     assert (tmp_path / "dest" / "a.txt").read_text() == "one"
     assert stamps(tmp_path / "old") == []
     assert "refusing to sync" in (engine.state_dir() / "run.log").read_text()
+
+
+# ---------------------------------------------------------------- device manifest and probe
+def device(tmp_path, name="thinkpad", probe=False, manifest=None):
+    d = {"name": name, "manifest": manifest or f"localdrv:{tmp_path}/drive/{name}/manifest.json"}
+    if probe:
+        d["probe"] = f"vault:{name}/.lifeboat-probe"
+    return d
+
+
+def test_manifest_is_uploaded_with_documented_keys_and_no_secrets(tmp_path, make_cfg, clock):
+    cfg = make_cfg(device=device(tmp_path), rclone={"password_command": "echo hunter2-pw"},
+                   settings={"command": "echo hunter2-settings"})
+    (tmp_path / "src" / "a.txt").write_text("one")
+    st = engine.run_backup(cfg, now=clock())
+    raw = (tmp_path / "drive" / "thinkpad" / "manifest.json").read_text()
+    doc = json.loads(raw)
+    assert set(doc) == {"format", "device", "host", "lifeboat", "time", "ok", "jobs"}
+    assert doc["format"] == 1 and doc["device"] == "thinkpad" and doc["time"] == st["time"] and doc["ok"] is True
+    assert doc["jobs"] == [{"name": "docs", "source": str(tmp_path / "src"), "dest": f"localdrv:{tmp_path}/dest",
+                            "old": f"localdrv:{tmp_path}/old", "encrypted": False}]
+    assert "hunter2" not in raw and "password_command" not in raw
+    assert st["manifest"] == {"ok": True, "rc": 0}
+
+
+def test_dry_run_uploads_no_manifest(tmp_path, make_cfg, clock):
+    cfg = make_cfg(device=device(tmp_path))
+    (tmp_path / "src" / "a.txt").write_text("one")
+    st = engine.run_backup(cfg, dry_run=True, now=clock())
+    assert "manifest" not in st and not (tmp_path / "drive").exists()
+
+
+def test_no_device_table_uploads_nothing(tmp_path, make_cfg, clock):
+    cfg = make_cfg()
+    (tmp_path / "src" / "a.txt").write_text("one")
+    st = engine.run_backup(cfg, now=clock())
+    assert st["ok"] and "manifest" not in st and "probe" not in st
+    assert sorted(p.name for p in tmp_path.iterdir() if p.name in ("drive", "crypt")) == []
+
+
+def test_manifest_failure_keeps_job_rc_but_fails_the_run_and_is_a_problem(tmp_path, make_cfg, clock):
+    cfg = make_cfg(device=device(tmp_path, manifest="nosuchremote:thinkpad/manifest.json"))
+    (tmp_path / "src" / "a.txt").write_text("one")
+    st = engine.run_backup(cfg, now=clock())
+    assert st["jobs"][0]["rc"] == 0 and st["ok"] is False
+    assert st["manifest"]["ok"] is False and st["manifest"]["rc"] != 0
+    assert "manifest rc=" in (engine.state_dir() / "run.log").read_text()
+    s = engine.status(cfg)
+    assert s["manifest"] == st["manifest"]
+    assert any("new laptop" in p["body"] for p in engine.problems(cfg, s))
+
+
+def test_probe_is_written_once_into_the_crypt_remote(tmp_path, make_cfg, clock):
+    cfg = make_cfg(device=device(tmp_path, probe=True))
+    (tmp_path / "src" / "a.txt").write_text("one")
+    st = engine.run_backup(cfg, now=clock(0))
+    assert st["probe"] == {"ok": True, "rc": 0} and st["ok"]
+    files = [p for p in (tmp_path / "crypt").rglob("*") if p.is_file()]
+    assert len(files) == 1 and files[0].read_bytes() != b"lifeboat-probe 1\n"  # encrypted at rest
+    before = (files[0].stat().st_mtime_ns, files[0].read_bytes())
+    st = engine.run_backup(cfg, now=clock(60))
+    assert st["probe"]["ok"]
+    assert (files[0].stat().st_mtime_ns, files[0].read_bytes()) == before
+    assert engine.rclone(cfg, ["cat", cfg.probe]) == (0, "lifeboat-probe 1\n")
+
+
+def test_check_probe_true_with_right_password_false_with_wrong(tmp_path, make_cfg, clock, monkeypatch):
+    cfg = make_cfg(device=device(tmp_path, probe=True))
+    (tmp_path / "src" / "a.txt").write_text("one")
+    engine.run_backup(cfg, now=clock())
+    bad = subprocess.run(["rclone", "obscure", "wrong-password"], capture_output=True, text=True, check=True).stdout.strip()
+    monkeypatch.setenv("RCLONE_CONFIG_BADVAULT_TYPE", "crypt")
+    monkeypatch.setenv("RCLONE_CONFIG_BADVAULT_REMOTE", f"localdrv:{tmp_path}/crypt")
+    monkeypatch.setenv("RCLONE_CONFIG_BADVAULT_PASSWORD", bad)
+    assert engine.check_probe("vault:thinkpad/.lifeboat-probe") is True
+    assert engine.check_probe("badvault:thinkpad/.lifeboat-probe") is False
+    assert engine.check_probe("vault:thinkpad/no-such-probe") is False
+
+
+def test_two_devices_share_one_drive_root_without_clobbering(tmp_path, make_cfg, clock):
+    def cfg_for(name):
+        c = make_cfg(device=device(tmp_path, name=name))
+        c.jobs[0].dest = f"localdrv:{tmp_path}/drive/{name}/docs"
+        c.jobs[0].old = f"localdrv:{tmp_path}/drive/{name}/_old"
+        c.jobs[0].source = str(tmp_path / f"src-{name}")
+        (tmp_path / f"src-{name}").mkdir()
+        (tmp_path / f"src-{name}" / f"{name}.txt").write_text(name)
+        return c
+    a, b = cfg_for("thinkpad"), cfg_for("macbook")
+    assert engine.run_backup(a, now=clock(0))["ok"] and engine.run_backup(b, now=clock(60))["ok"]
+    for name in ("thinkpad", "macbook"):
+        doc = json.loads((tmp_path / "drive" / name / "manifest.json").read_text())
+        assert doc["device"] == name and doc["ok"] is True and doc["jobs"][0]["dest"].endswith(f"{name}/docs")
+        assert (tmp_path / "drive" / name / "docs" / f"{name}.txt").read_text() == name
+    assert engine.run_backup(a, now=clock(120))["ok"]
+    assert not (tmp_path / "drive" / "macbook" / "_old").exists()

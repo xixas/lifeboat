@@ -40,6 +40,9 @@ class Config:
     keep_days: int = 90
     settings_command: str = ""
     claude_skills: str = "auto"
+    device_name: str = ""
+    manifest: str = ""
+    probe: str = ""
     path: Path = field(default_factory=lambda: config_path())
 
     def job(self, name: str) -> Job:
@@ -93,11 +96,11 @@ def _get(tbl: dict, where: str, key: str, typ, default):
 
 
 def parse(data: dict, path: Path | None = None) -> Config:
-    known = {"rclone", "schedule", "jobs", "settings", "modules"}
+    known = {"rclone", "schedule", "jobs", "settings", "modules", "device"}
     for k in data:
         if k not in known:
             raise ConfigError(f"unknown section {k!r}")
-    rc, sch, st, mod = (_table(data, k) for k in ("rclone", "schedule", "settings", "modules"))
+    rc, sch, st, mod, dev = (_table(data, k) for k in ("rclone", "schedule", "settings", "modules", "device"))
     cfg = Config(
         jobs=[],
         rclone_config=_get(rc, "rclone", "config", str, ""),
@@ -106,6 +109,9 @@ def parse(data: dict, path: Path | None = None) -> Config:
         keep_days=_get(sch, "schedule", "keep_days", int, 90),
         settings_command=_get(st, "settings", "command", str, ""),
         claude_skills=_get(mod, "modules", "claude_skills", str, "auto"),
+        device_name=_get(dev, "device", "name", str, ""),
+        manifest=_get(dev, "device", "manifest", str, ""),
+        probe=_get(dev, "device", "probe", str, ""),
     )
     if path is not None:
         cfg.path = path
@@ -115,6 +121,14 @@ def parse(data: dict, path: Path | None = None) -> Config:
         raise ConfigError("schedule.keep_days must be at least 1")
     if cfg.claude_skills not in MODULE_MODES:
         raise ConfigError(f"modules.claude_skills must be one of {', '.join(MODULE_MODES)}, got {cfg.claude_skills!r}")
+    if "device" in data:
+        for k in dev:
+            if k not in ("name", "manifest", "probe"):
+                raise ConfigError(f"device.{k} is not a known key")
+        if not NAME_RE.match(cfg.device_name):
+            raise ConfigError(f"device.name may only use letters, digits, '.', '_' and '-', got {cfg.device_name!r}")
+        if not cfg.manifest:
+            raise ConfigError("device.manifest is required when [device] is present")
     jobs = data.get("jobs", [])
     if not isinstance(jobs, list) or not jobs:
         raise ConfigError("jobs: define at least one [[jobs]] entry")

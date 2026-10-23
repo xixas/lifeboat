@@ -5,6 +5,7 @@ import json
 import os
 import re
 import shutil
+import socket
 import subprocess
 import tempfile
 import time
@@ -12,6 +13,7 @@ from collections.abc import Callable
 from datetime import datetime, timedelta
 from pathlib import Path
 
+from lifeboat import __version__
 from lifeboat.config import Config, ConfigError, Job
 
 STAMP_FMT = "%Y-%m-%d_%H%M%S"
@@ -84,11 +86,12 @@ def rclone_argv(cfg: Config, args: list[str]) -> list[str]:
     return argv + list(args)
 
 
-def rclone(cfg: Config, args: list[str], timeout: int | None = 120) -> tuple[int, str]:
-    """Run rclone and capture stdout. rc 127 if rclone is missing or times out."""
+def rclone(cfg: Config, args: list[str], timeout: int | None = 120, input: str | None = None,
+           env: dict | None = None) -> tuple[int, str]:
+    """Run rclone and capture stdout; `input` is fed to stdin (for rcat). rc 127 if rclone is missing or times out."""
     try:
-        p = subprocess.run(rclone_argv(cfg, args), env=rclone_env(cfg), capture_output=True, text=True,
-                           timeout=timeout, stdin=subprocess.DEVNULL)
+        p = subprocess.run(rclone_argv(cfg, args), env=env if env is not None else rclone_env(cfg), capture_output=True, text=True,
+                           timeout=timeout, input=input, stdin=None if input is not None else subprocess.DEVNULL)
         return p.returncode, p.stdout
     except (OSError, subprocess.TimeoutExpired):
         return 127, ""
@@ -146,6 +149,37 @@ def run_settings(cfg: Config, emit: Emit | None = None) -> bool:
     return rc == 0
 
 
+def manifest_doc(cfg: Config, state: dict) -> dict:
+    """What a new laptop needs to find and restore this device's backup. Paths only: no file lists, no secrets."""
+    return {"format": 1, "device": cfg.device_name, "host": socket.gethostname(), "lifeboat": __version__,
+            "time": state["time"], "ok": state["ok"],
+            "jobs": [{"name": j.name, "source": j.source, "dest": j.dest, "old": j.old, "encrypted": j.encrypted}
+                     for j in cfg.jobs]}
+
+
+def upload_manifest(cfg: Config, state: dict) -> dict:
+    rc, _ = rclone(cfg, ["rcat", cfg.manifest] + COMMON, input=json.dumps(manifest_doc(cfg, state), indent=2) + "\n", timeout=None)
+    return {"ok": rc == 0, "rc": rc}
+
+
+PROBE_TEXT = "lifeboat-probe 1\n"
+
+
+def ensure_probe(cfg: Config) -> dict:
+    """Create the passphrase probe inside the crypt remote unless it is already there."""
+    rc, out = rclone(cfg, ["lsf", cfg.probe])
+    if rc != 0 or not out.strip():
+        rc, _ = rclone(cfg, ["rcat", cfg.probe] + COMMON, input=PROBE_TEXT, timeout=None)
+    return {"ok": rc == 0, "rc": rc}
+
+
+def check_probe(probe: str, rclone_config: str = "", env: dict | None = None) -> bool:
+    """True only if the probe reads back through its crypt remote. A crypt remote's root listing succeeds with a
+    wrong password; reading a known file does not. Works without a Lifeboat config (restore wizard)."""
+    rc, out = rclone(Config(jobs=[], rclone_config=rclone_config), ["cat", probe], timeout=60, env=env)
+    return rc == 0 and out.startswith("lifeboat-probe")
+
+
 def run_backup(cfg: Config, dry_run: bool = False, now: datetime | None = None, emit: Emit | None = None,
                settings: bool = True) -> dict:
     """Optional settings command, then every job. Always writes last-run.json. Returns that state."""
@@ -174,7 +208,21 @@ def run_backup(cfg: Config, dry_run: bool = False, now: datetime | None = None, 
             log.write(line + "\n")
             if emit:
                 emit(line)
-    state = {"time": now_iso(), "dry_run": dry_run, "ok": all(r["rc"] == 0 for r in results), "jobs": results}
+        state = {"time": now_iso(), "dry_run": dry_run, "ok": all(r["rc"] == 0 for r in results), "jobs": results}
+        if cfg.manifest and not dry_run:
+            state["manifest"] = upload_manifest(cfg, state)
+            line = f"manifest rc={state['manifest']['rc']}"
+            log.write(line + "\n")
+            if emit:
+                emit(line)
+            state["ok"] = state["ok"] and state["manifest"]["ok"]
+        if cfg.probe and not dry_run:
+            state["probe"] = ensure_probe(cfg)
+            line = f"probe rc={state['probe']['rc']}"
+            log.write(line + "\n")
+            if emit:
+                emit(line)
+            state["ok"] = state["ok"] and state["probe"]["ok"]
     write_json("last-run.json", state)
     return state
 
@@ -300,7 +348,8 @@ def status(cfg: Config) -> dict:
     listed = rclone(cfg, ["listremotes"], timeout=20)[1].split() if found else []
     d = {"config_path": str(cfg.path), "state_dir": str(sd), "daily_at": cfg.daily_at, "keep_days": cfg.keep_days,
          "rclone": {"found": found}, "missing_remotes": [r for r in remote_names(cfg) if found and r not in listed],
-         "last": last, "last_age_days": age_days((last or {}).get("time")), "jobs": jobs,
+         "last": last, "manifest": (last or {}).get("manifest"), "probe": (last or {}).get("probe"),
+         "last_age_days": age_days((last or {}).get("time")), "jobs": jobs,
          "settings": {"enabled": bool(cfg.settings_command), "command": cfg.settings_command,
                       "last": read_json(sd / "settings.json"), "log": tail(sd / "run.log", 20)},
          "prune": read_json(sd / "prune.json"), "timers": timers(), "skills": None}
@@ -366,6 +415,9 @@ def problems(cfg: Config, st: dict) -> list[dict]:
     if st["missing_remotes"]:
         out.append({"page": "backups", "title": "rclone remote not configured", "urgent": False,
                     "body": "Missing: " + ", ".join(st["missing_remotes"]) + ". Run rclone config."})
+    if any(st[k] and not st[k]["ok"] for k in ("manifest", "probe")):
+        out.append({"page": "backups", "title": "Restore discovery is broken", "urgent": True,
+                    "body": "Restore on a new laptop would not find this backup: the device manifest or passphrase probe could not be written."})
     snap = st["settings"]["last"]
     if st["settings"]["enabled"] and snap and not snap.get("ok"):
         out.append({"page": "settings", "title": "Settings snapshot failed",

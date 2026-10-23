@@ -474,7 +474,7 @@ def test_run_backup_reports_job_events_with_file_counts(tmp_path, make_cfg, cloc
     events = []
     engine.run_backup(cfg, now=clock(), on_event=events.append)
     assert events[0] == {"event": "job_start", "name": "docs"}
-    assert events[1] == {"event": "job_end", "name": "docs", "rc": 0, "skipped": False, "files": 2, "error": ""}
+    assert events[1] == {"event": "job_end", "name": "docs", "rc": 0, "skipped": False, "files": 2, "error": "", "reason": ""}
     events.clear()
     engine.run_backup(cfg, now=clock(5), on_event=events.append)
     assert events[1]["files"] == 0
@@ -511,3 +511,44 @@ def test_manifest_and_probe_are_one_finishing_step(tmp_path, make_cfg, clock):
     events.clear()
     engine.run_backup(cfg, dry_run=True, now=clock(5), on_event=events.append)
     assert [e["event"] for e in events] == ["job_start", "job_end"]
+
+
+def _reason(cfg, clock, **kw):
+    events = []
+    engine.run_backup(cfg, now=clock(), on_event=events.append, **kw)
+    return events[1]["reason"]
+
+
+def test_job_end_reason_missing_folder(tmp_path, make_cfg, clock):
+    cfg = make_cfg()
+    (tmp_path / "src").rmdir()
+    assert _reason(cfg, clock) == "missing"
+
+
+def test_job_end_reason_empty_folder_with_a_backup(tmp_path, make_cfg, clock):
+    cfg = make_cfg()
+    (tmp_path / "dest").mkdir()
+    (tmp_path / "dest" / "a.txt").write_text("one")
+    assert _reason(cfg, clock) == "empty_with_backup"
+
+
+def test_job_end_reason_unreadable_destination(tmp_path, make_cfg, clock, monkeypatch):
+    cfg = make_cfg()
+    real = engine.rclone
+    monkeypatch.setattr(engine, "rclone", lambda c, args, **kw: (1, "") if args[0] == "lsf" else real(c, args, **kw))
+    assert _reason(cfg, clock) == "dest_unreadable"
+
+
+def test_job_end_reason_mkdir_failed(tmp_path, make_cfg, clock, monkeypatch):
+    cfg = make_cfg()
+    real = engine.rclone
+    monkeypatch.setattr(engine, "rclone", lambda c, args, **kw: (1, "") if args[0] == "mkdir" else real(c, args, **kw))
+    assert _reason(cfg, clock) == "mkdir_failed"
+
+
+def test_job_end_reason_rclone_failure_and_success(tmp_path, make_cfg, clock, monkeypatch):
+    cfg = make_cfg()
+    (tmp_path / "src" / "a.txt").write_text("one")
+    assert _reason(cfg, clock) == ""
+    monkeypatch.setattr(engine, "stream", lambda argv, env, log, emit=None: 1)
+    assert _reason(cfg, clock) == "rclone"

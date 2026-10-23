@@ -16,7 +16,12 @@ from lifeboat.config import ConfigError, load_config  # noqa: E402
 
 FileDialog = Gtk.FileDialog
 FINISHING = "Finishing up"
-REFUSED = "Folder is empty but its backup isn't. Is the drive plugged in? Nothing was changed."
+REASONS = {
+    "missing": "This folder doesn't exist any more. Was it renamed or moved? Nothing was changed.",
+    "empty_with_backup": "Folder is empty but its backup isn't. Is the drive plugged in? Nothing was changed.",
+    "dest_unreadable": "Couldn't check the backup on Google Drive. Check your connection and try again. Nothing was changed.",
+    "mkdir_failed": "Couldn't create its folder on Google Drive.",
+}
 
 
 class Step:
@@ -168,7 +173,7 @@ class BackupProgress:
             step.set("ok", f"Copied {files} file{'s' if files != 1 else ''}" if files else "Already up to date")
         else:
             error = e.get("error") or f"Failed (exit {e.get('rc')})"
-            self._fail(step, error, REFUSED if "refusing to sync" in error else error)
+            self._fail(step, error, REASONS.get(e.get("reason"), error))
 
     def _fail(self, step, error, subtitle):
         """Swap the row for one that opens by itself, holding the error and what to do about it."""

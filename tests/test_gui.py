@@ -1003,7 +1003,7 @@ shot("progress-1-running")
 ev(event="job_end", name="documents", rc=0, skipped=False, files=2, error="")
 ev(event="job_start", name="photos")
 bp.on_log("photos: refusing to sync: source /x is missing or empty - nothing was changed")
-ev(event="job_end", name="photos", rc=2, skipped=False, files=0,
+ev(event="job_end", name="photos", rc=2, skipped=False, files=0, reason="empty_with_backup",
    error="photos: refusing to sync: source /x is missing or empty - nothing was changed")
 ev(event="job_start", name="ssh-keys")
 ev(event="job_end", name="ssh-keys", rc=0, skipped=False, files=0, error="")
@@ -1026,6 +1026,14 @@ assert bp.retry.get_visible() and bp.dlg.get_can_close()
 assert bp.wt.get_subtitle() == "Finished with problems"
 assert "Try Again" in [b.get_label() for b in buttons(bp.dlg.get_child())] and bp.retry.is_ancestor(bp.dlg) and bp.retry.get_visible()
 shot("progress-2-failed")
+
+for reason, want in (("missing", "doesn't exist any more"), ("dest_unreadable", "Check your connection"),
+                     ("mkdir_failed", "create its folder"), ("rclone", "ERROR : boom")):
+    st = progress.Step("x")
+    bp.list.append(st.row)
+    bp._job_end(st, {"rc": 1, "error": "ERROR : boom", "reason": reason})
+    assert want in st.row.get_subtitle(), (reason, st.row.get_subtitle())
+    bp.list.remove(st.row)
 
 # the Log toggle swaps pages, "Show in Log" lands on the failed job's lines
 assert bp.stack.get_visible_child_name() == "progress"

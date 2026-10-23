@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.1](https://github.com/xixas/lifeboat/compare/v0.3.0...v0.3.1) (2026-10-23)
+
+
+### Bug Fixes
+
+* count agent-native skills as external on the skills page ([f7288dd](https://github.com/xixas/lifeboat/commit/f7288dd68ee964dacfb030c4ad3aeca02062417f))
+
 ## [0.3.0](https://github.com/xixas/lifeboat/compare/v0.2.0...v0.3.0) (2026-10-23)
 
 

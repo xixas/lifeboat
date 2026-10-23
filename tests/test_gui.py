@@ -64,7 +64,7 @@ def test_main_window_builds_with_and_without_config(env, make_cfg):
     assert p.returncode == 0, p.stderr
 
 
-WIZARD_SCRIPT = r'''
+PRELUDE = r'''
 import os
 import sys
 import time
@@ -82,7 +82,7 @@ Adw.init()
 from datetime import datetime, timezone
 from pathlib import Path
 from lifeboat import setup, timer
-from lifeboat.app import wizard
+from lifeboat.app import flow, wizard
 from lifeboat.app.window import Win, gather
 
 SHOTS = os.environ.get("LIFEBOAT_SHOTS")
@@ -208,7 +208,7 @@ class FakeFileDialog:
     def save_finish(self, r): return _F(str(HOME / "kit.pdf"))
 
 HOME = Path(sys.argv[1])
-wizard.UriLauncher = FakeUri
+flow.UriLauncher = FakeUri
 wizard.FileDialog = FakeFileDialog
 setup.SignIn = FakeSignIn
 setup.write_drive_remote = lambda conf, token: (open(conf, "a").write("[lifeboat]\n"), calls.append(("drive_remote", token)))
@@ -223,7 +223,7 @@ setup.check_passphrase = lambda conf, pw, device: calls.append(("check", pw, dev
 win = Win(None)
 win.run_cli = lambda *a: calls.append(("run_cli",) + a)
 win.refresh = lambda: calls.append(("refresh",))
-win.open_restore_wizard = lambda device=None: calls.append(("restore", device))
+win.open_restore_wizard = lambda device=None, handover=None: calls.append(("restore", device))
 win.present()
 win.apply(gather())
 assert win.data["kind"] == "noconfig"
@@ -233,7 +233,9 @@ for want in ("Set Up Backup", "Restore From a Backup", "Edit a config file inste
     assert want in names, names
 shot("00-gate", win.get_content())
 
+'''
 
+SETUP_BODY = r'''
 def start():
     global wiz
     calls.clear()
@@ -422,7 +424,8 @@ to_folders()
 to_setup()
 assert pump(lambda: tag() == "setting-up" and wiz.get_can_close()), "dialog stuck"
 txt = " ".join(labels(vis()))
-assert "Almost Done" in txt and "daily timer is not" in txt and "No such file" in txt, txt
+assert "Almost Done" in txt and "daily timer is not" in txt, txt
+assert "systemd isn't available" in txt and "No such file" not in txt, txt
 assert not any(c[0] == "run_cli" for c in calls)
 shot("09-timer-failed")
 calls.clear()
@@ -544,7 +547,441 @@ print("WIZARD OK")
 '''
 
 
-def test_setup_wizard_walkthrough(env, monkeypatch):
+RESTORE_BODY = r'''
+import threading
+from datetime import timedelta
+from lifeboat.app import restore, window
+
+CONF = setup.rclone_conf_path()
+CFG_FILE = Path(os.environ["XDG_CONFIG_HOME"]) / "lifeboat" / "config.toml"
+ROOT = setup.drive_root()
+NOW = datetime.now(timezone.utc)
+DONE_ALL = "Log out and back in so every app picks up its settings."
+
+
+def manifest(device, age_h):
+    base, secure = f"lifeboat:{ROOT}/{device}", f"lifeboat-secure:{device}"
+    return {"format": 1, "device": device, "time": (NOW - timedelta(hours=age_h)).isoformat(), "ok": True, "jobs": [
+        {"name": "documents", "source": "~/Documents", "dest": f"{base}/Documents", "old": f"{base}/_old", "encrypted": False},
+        {"name": "ssh-keys", "source": "~/.ssh", "dest": f"{secure}/ssh-keys", "old": f"{secure}/_old", "encrypted": True}]}
+
+
+OLD = manifest("old-laptop", 72)   # last backup 3 days ago: nobody is using it
+LIVE = manifest("work-laptop", 2)  # backed up two hours ago: still in use
+inst = []
+RealRestoreWizard = restore.RestoreWizard
+
+
+class Capture(RealRestoreWizard):
+    def __init__(self, *a, **k):
+        super().__init__(*a, **k)
+        inst.append(self)
+
+
+window.RestoreWizard = Capture
+win.open_restore_wizard = lambda device=None, handover=None: Capture(win, device, handover).present(win)
+win.open_setup_wizard = lambda: calls.append(("open_setup",))
+gate = threading.Event()
+gate.set()
+rc_for = {}
+
+
+def fake_restore_jobs(cfg, names, emit):
+    calls.append(("restore_jobs", cfg, list(names)))
+    emit("copying files")
+    gate.wait(10)
+    return {n: rc_for.get(n, 0) for n in names}
+
+
+setup.restore_jobs = fake_restore_jobs
+setup.config_from_manifest = lambda path, m, at, names=None: calls.append(("from_manifest", path, m, at, names)) or (CFG_FILE.parent.mkdir(parents=True, exist_ok=True), CFG_FILE.write_text("x"))
+setup.write_wizard_config = lambda path, device, choices, at, existing_devices=None: (
+    calls.append(("config", device, choices, at, existing_devices)), CFG_FILE.parent.mkdir(parents=True, exist_ok=True), CFG_FILE.write_text("x"))
+restore.load_config = lambda p: object()
+found[:] = []
+
+
+def start():
+    global wiz
+    calls.clear()
+    CFG_FILE.unlink(missing_ok=True)
+    rc_for.clear()
+    wiz = RealRestoreWizard(win)
+    wiz.present(win)
+    pump(timeout=0.3)
+    return wiz
+
+
+def sign_in(expect):
+    click(vis(), "Sign In With Google")
+    assert pump(lambda: tag() == expect), (tag(), labels(vis()))
+
+
+def to_what(manifests=None):
+    found[:] = manifests or [OLD]
+    start()
+    sign_in("passphrase" if len(found) == 1 else "choose")
+    if tag() == "choose":
+        click(vis(), "Continue")
+    wiz.pw_row.set_text("right-pass")
+    click(vis(), "Check")
+    assert pump(lambda: tag() == "what"), tag()
+
+
+def finish():
+    click(vis(), "Restore")
+    assert tag().startswith("restoring") and not wiz.get_can_close()
+
+
+def done_text():
+    return " ".join(labels(vis()))
+
+
+# ---- no backups on this account
+start()
+assert tag() == "signin"
+shot("r01-signin")
+sign_in("none")
+assert "No Backups Found" in done_text() and "only sees backups it made" in done_text(), done_text()
+assert wiz.signin_banner.get_revealed() is False
+shot("r02-no-backups")
+click(vis(), "Sign In With Another Account")
+assert tag() == "signin"
+pump(timeout=0.6)  # the popped page leaves the stack when its animation ends
+sign_in("none")
+click(vis(), "Set Up Backup Instead")
+assert ("open_setup",) in calls
+pump(timeout=0.3)
+assert not CONF.exists(), "token left behind after closing"
+
+# ---- Drive unreachable is never reported as "no backups"
+setup.find_backups = lambda conf: (_ for _ in ()).throw(setup.SetupError("Could not list your Google Drive."))
+start()
+click(vis(), "Sign In With Google")
+assert pump(lambda: wiz.signin_banner.get_revealed() and "Drive" in wiz.signin_banner.get_title())
+assert tag() == "signin" and "No Backups" not in done_text()
+shot("r03-drive-unreachable")
+wiz.force_close()
+pump(timeout=0.3)
+setup.find_backups = lambda conf: list(found)
+
+# ---- one backup: straight to the passphrase; wrong, then right
+found[:] = [OLD]
+start()
+sign_in("passphrase")
+assert wiz.picked == "old-laptop"
+shot("r04-passphrase")
+click(vis(), "Where's my passphrase?")
+pump(timeout=0.3)
+wiz.pw_row.set_text("wrong-pass")
+click(vis(), "Check")
+assert pump(lambda: wiz.pw_error.get_visible())
+assert wiz.pw_row.has_css_class("error") and tag() == "passphrase"
+assert ("check", "wrong-pass", "old-laptop") in calls
+assert not any(c[0] == "check" and c[1] == TOKEN for c in calls)
+shot("r05-passphrase-wrong")
+check_no_leak()
+# the check cannot reach Drive: a banner, not "wrong passphrase"
+setup.check_passphrase = lambda conf, pw, device: (_ for _ in ()).throw(setup.SetupError(setup.UNREACHABLE))
+wiz.pw_row.set_text("right-pass")
+click(vis(), "Check")
+assert pump(lambda: wiz.pw_banner.get_revealed()) and not wiz.pw_error.get_visible()
+setup.check_passphrase = lambda conf, pw, device: calls.append(("check", pw, device)) or pw == "right-pass"
+click(vis(), "Check")
+assert pump(lambda: tag() == "what")
+check_no_leak()
+rows = [w for w in walk(vis()) if isinstance(w, Adw.ActionRow) and not isinstance(w, Adw.SwitchRow)]
+got = [(r.get_title(), r.get_subtitle()) for r in rows]
+assert got == [("Documents", "~/Documents"), ("SSH keys", "~/.ssh · Encrypted")], got
+assert "Nothing is deleted." in done_text()
+assert wiz.keep_row.get_active() is True and not wiz.name_row.get_visible()  # 3 days old: continue it
+shot("r06-what-keep-on")
+wiz.force_close()
+pump(timeout=0.3)
+CONF.unlink(missing_ok=True)
+
+# ---- two backups: choose one; keep backing up ON (old laptop is gone)
+found[:] = [LIVE, OLD]
+start()
+sign_in("choose")
+shot("r07-choose")
+radios = [w for w in walk(vis()) if isinstance(w, Gtk.CheckButton) and w.get_visible()]
+radios[1].set_active(True)
+assert wiz.picked == "old-laptop"
+click(vis(), "Continue")
+wiz.pw_row.set_text("right-pass")
+click(vis(), "Check")
+assert pump(lambda: tag() == "what")
+assert ("check", "right-pass", "old-laptop") in calls
+gate.clear()
+finish()
+assert pump(lambda: any(c[0] == "restore_jobs" for c in calls))
+pump(timeout=0.3)
+assert "copying files" in wiz.buf.get_text(wiz.buf.get_start_iter(), wiz.buf.get_end_iter(), False)
+assert not wiz.get_can_close()
+shot("r08-restoring")
+gate.set()
+assert pump(lambda: tag() == "restoring" and "Your Files Are Back" in done_text()), done_text()
+assert wiz.get_can_close()
+assert DONE_ALL in done_text()
+shot("r09-all-done")
+order = [c[0] for c in calls]
+# the config is only written after the restore, and the timer only after the config
+assert order.index("make_remotes") < order.index("restore_jobs") < order.index("from_manifest") < order.index("timer"), order
+assert ("make_remotes", TOKEN, "right-pass") in calls
+fm = [c for c in calls if c[0] == "from_manifest"][0]
+assert fm[2] == OLD and fm[3] == "13:00" and fm[4] == ["documents", "ssh-keys"] and not any(c[0] == "config" for c in calls)
+rj = [c for c in calls if c[0] == "restore_jobs"][0]
+assert rj[2] == ["documents", "ssh-keys"] and rj[1].jobs[0].dest == OLD["jobs"][0]["dest"] and str(rj[1].rclone_config) == str(CONF)
+calls.clear()
+click(vis(), "Done")
+pump(timeout=0.4)
+assert ("refresh",) in calls
+assert CONF.exists(), "config exists, so the remotes are kept"
+assert wiz.token is None and wiz.passphrase is None
+CONF.unlink()
+
+# ---- keep backing up OFF (old laptop still in use): a new device; restore still reads the old device's folders
+to_what([LIVE])
+assert wiz.keep_row.get_active() is False and wiz.name_row.get_visible()  # 2 hours old: probably still in use
+shot("r10-what-keep-off")
+wiz.name_row.set_text("bad name")
+assert wiz.name_row.has_css_class("error") and not wiz.restore_btn.get_sensitive()
+shot("r11-what-invalid-name")
+wiz.name_row.set_text("work-laptop")
+assert not wiz.restore_btn.get_sensitive() and "already uses" in done_text()  # another laptop's folder
+wiz.name_row.set_text("new-laptop")
+list(wiz.checks.values())[1].set_active(False)  # leave the keys out
+finish()
+assert pump(lambda: "Your Files Are Back" in done_text()), done_text()
+cfgc = [c for c in calls if c[0] == "config"][0]
+assert cfgc[1] == "new-laptop" and cfgc[3] == "13:00" and cfgc[4] == ["work-laptop"], cfgc
+assert [(c["path"], c["secret"], c["label"]) for c in cfgc[2]] == [("~/Documents", False, "documents")], cfgc[2]
+assert not any(c[0] == "from_manifest" for c in calls)
+rj = [c for c in calls if c[0] == "restore_jobs"][0]
+assert rj[2] == ["documents"] and rj[1].jobs[0].dest == LIVE["jobs"][0]["dest"], rj  # the OLD device's folder
+assert ("timer",) in calls
+wiz.force_close()
+pump(timeout=0.3)
+CONF.unlink(missing_ok=True)
+
+# ---- the default name for a new device is this laptop's, made unique
+to_what([LIVE])
+assert wiz.name_row.get_text() == setup.unique_device_name(setup.default_device_name(), ["work-laptop"])
+# ---- nothing ticked: Restore stays off
+for c in wiz.checks.values():
+    c.set_active(False)
+assert not wiz.restore_btn.get_sensitive()
+wiz.force_close()
+pump(timeout=0.3)
+CONF.unlink(missing_ok=True)
+
+# ---- one folder fails (keep mode): it is listed, NOT written to the config, no timer; Try Again re-runs only it
+to_what()
+rc_for["ssh-keys"] = 23
+finish()
+assert pump(lambda: "Almost Done" in done_text()), done_text()
+assert "Some folders could not be restored" in done_text() and "SSH keys" in done_text() and "(exit 23)" in done_text(), done_text()
+assert "Not backed up from this laptop: SSH keys" in done_text() and "not scheduled until every folder" in done_text(), done_text()
+err_rows = [w for w in walk(vis()) if isinstance(w, Adw.ActionRow) and w.has_css_class("error")]
+assert [r.get_title() for r in err_rows] == ["SSH keys"]
+assert vis().get_title() == "Not Finished"
+fm = [c for c in calls if c[0] == "from_manifest"]
+assert [c[4] for c in fm] == [["documents"]], fm  # a half-restored folder must never be synced over its backup
+assert not any(c[0] == "timer" for c in calls), calls
+shot("r12-partial-failure")
+calls.clear()
+rc_for.clear()
+click(vis(), "Try Again")
+assert not wiz.get_can_close()
+assert pump(lambda: "Your Files Are Back" in done_text()), done_text()
+assert vis().get_title() == "All Done"
+rj = [c for c in calls if c[0] == "restore_jobs"]
+assert len(rj) == 1 and rj[0][2] == ["ssh-keys"], rj
+assert not any(c[0] in ("make_remotes", "config") for c in calls), calls
+fm = [c for c in calls if c[0] == "from_manifest"]
+assert [c[4] for c in fm] == [["documents", "ssh-keys"]], fm  # now the job is added...
+assert [c[0] for c in calls].count("timer") == 1 and [c[0] for c in calls].index("from_manifest") < [c[0] for c in calls].index("timer")  # ...and the timer installed
+wiz.force_close()
+pump(timeout=0.3)
+CONF.unlink(missing_ok=True)
+
+# ---- keep mode, one folder unticked and one failing: neither is written, no timer, and the page says so
+MULTI = manifest("old-laptop", 72)
+MULTI["jobs"].insert(1, dict(MULTI["jobs"][0], name="pictures", source="~/Pictures", dest=MULTI["jobs"][0]["dest"].replace("Documents", "Pictures")))
+to_what([MULTI])
+list(wiz.checks.values())[1].set_active(False)  # Pictures left out
+rc_for["ssh-keys"] = 23
+finish()
+assert pump(lambda: "Almost Done" in done_text()), done_text()
+assert [c[4] for c in calls if c[0] == "from_manifest"] == [["documents"]]
+assert not any(c[0] == "timer" for c in calls)
+assert "Not backed up from this laptop: Pictures, SSH keys." in done_text(), done_text()
+shot("r12b-partial-and-unticked")
+click(vis(), "Done")  # failures outstanding: the config keeps only what was restored
+pump(timeout=0.4)
+assert [c[4] for c in calls if c[0] == "from_manifest"] == [["documents"]] and not any(c[0] == "timer" for c in calls)
+CONF.unlink(missing_ok=True)
+
+# ---- everything fails (keep mode): no config at all, no timer
+to_what()
+rc_for.update({"documents": 1, "ssh-keys": 1})
+finish()
+assert pump(lambda: "Almost Done" in done_text()), done_text()
+assert not any(c[0] in ("from_manifest", "config", "timer") for c in calls), calls
+wiz.force_close()
+pump(timeout=0.3)
+CONF.unlink(missing_ok=True)
+
+# ---- restore itself blows up: every folder is listed as failed, the dialog is closable
+setup.restore_jobs = lambda cfg, names, emit: 1 / 0
+to_what()
+finish()
+assert pump(lambda: "Almost Done" in done_text()) and wiz.get_can_close(), done_text()
+assert len([w for w in walk(vis()) if isinstance(w, Adw.ActionRow) and w.has_css_class("error")]) == 2
+wiz.force_close()
+pump(timeout=0.3)
+CONF.unlink(missing_ok=True)
+setup.restore_jobs = fake_restore_jobs
+
+# ---- remotes cannot be created: an error page, Back returns, nothing restored, no config; Restore again works
+real_make = setup.make_remotes
+setup.make_remotes = lambda conf, token, pw: (_ for _ in ()).throw(setup.SetupError("rclone could not read the new remotes."))
+to_what()
+finish()
+assert pump(lambda: wiz.get_can_close() and "Restore Failed" in done_text()), done_text()
+assert ".." not in done_text(), done_text()
+assert vis().get_title() == "Restore Failed"
+assert not CFG_FILE.exists() and not any(c[0] == "restore_jobs" for c in calls)
+shot("r13-restore-failed")
+click(vis(), "Back")
+assert pump(lambda: tag() == "what")
+pump(timeout=0.6)
+setup.make_remotes = real_make
+click(vis(), "Restore")
+assert pump(lambda: "Your Files Are Back" in done_text()), (tag(), done_text())  # a fresh progress page, not a hidden one
+assert wiz.get_can_close()
+wiz.force_close()
+pump(timeout=0.3)
+CONF.unlink(missing_ok=True)
+
+# ---- a retired folder is listed (off by default), restorable, and never added to the config
+RET = manifest("old-laptop", 72)
+RET["retired"] = [dict(RET["jobs"][0], name="pictures", source="~/Pictures", since=(NOW - timedelta(days=5)).isoformat(),
+                       dest=RET["jobs"][0]["dest"].replace("Documents", "Pictures"))]
+to_what([RET])
+rows = [w for w in walk(vis()) if isinstance(w, Adw.ActionRow) and not isinstance(w, Adw.SwitchRow)]
+got = [(r.get_title(), r.get_subtitle()) for r in rows]
+want_since = (NOW - timedelta(days=5))
+assert got[2] == ("Pictures", f"~/Pictures · Not backed up since {want_since.day} {want_since.strftime('%b %Y')}"), got
+assert [c.get_active() for c in wiz.checks.values()] == [True, True, False]
+shot("r16-what-retired")
+list(wiz.checks.values())[2].set_active(True)
+finish()
+assert pump(lambda: "Your Files Are Back" in done_text() or "Almost Done" in done_text()), done_text()
+rj = [c for c in calls if c[0] == "restore_jobs"][0]
+assert rj[2] == ["documents", "ssh-keys", "pictures"] and rj[1].jobs[2].dest == RET["retired"][0]["dest"], rj
+assert [c[4] for c in calls if c[0] == "from_manifest"] == [["documents", "ssh-keys"]]
+assert "Not backed up from this laptop: Pictures." in done_text(), done_text()
+wiz.force_close()
+pump(timeout=0.3)
+CONF.unlink(missing_ok=True)
+
+# ---- switching mode after an earlier attempt: the first mode's config is removed and not reused
+timer.install = lambda cfg: 1 / 0
+to_what()  # old backup, 3 days: keep ON
+finish()
+assert pump(lambda: wiz.get_can_close() and "Restore Failed" in done_text()), done_text()
+assert CFG_FILE.exists() and [c[4] for c in calls if c[0] == "from_manifest"] == [["documents", "ssh-keys"]]
+timer.install = lambda cfg: calls.append(("timer",)) or 0
+click(vis(), "Back")
+assert pump(lambda: tag() == "what")
+pump(timeout=0.6)
+wiz.keep_row.set_active(False)
+wiz.name_row.set_text("new-laptop")
+calls.clear()
+finish()
+assert pump(lambda: "Your Files Are Back" in done_text()), done_text()
+cfgc = [c for c in calls if c[0] == "config"]
+assert len(cfgc) == 1 and cfgc[0][1] == "new-laptop", calls  # written for the new device, not skipped as "already ours"
+assert not any(c[0] == "from_manifest" for c in calls) and ("timer",) in calls
+wiz.force_close()
+pump(timeout=0.3)
+CONF.unlink(missing_ok=True)
+
+# ---- no systemd: files are back, the page says so in plain words
+timer.install = lambda cfg: (_ for _ in ()).throw(FileNotFoundError(2, "No such file or directory"))
+to_what()
+finish()
+assert pump(lambda: "Almost Done" in done_text()), done_text()
+assert "systemd isn't available" in done_text() and "No such file" not in done_text(), done_text()
+assert DONE_ALL in done_text()
+shot("r14-no-systemd")
+wiz.force_close()
+pump(timeout=0.3)
+CONF.unlink(missing_ok=True)
+timer.install = lambda cfg: calls.append(("timer",)) or 0
+
+# ---- hand-over from the setup wizard: no second sign-in, and the conf survives the hand-over
+found[:] = [OLD, LIVE]
+calls.clear()
+inst.clear()
+CONF.unlink(missing_ok=True)
+CFG_FILE.unlink(missing_ok=True)
+sw = wizard.SetupWizard(win)
+sw.present(win)
+pump(timeout=0.3)
+wiz = sw
+click(vis(), "Continue")
+click(vis(), "Sign In With Google")
+assert pump(lambda: tag() == "existing"), tag()
+radios = [w for w in walk(vis()) if isinstance(w, Gtk.CheckButton) and w.get_visible()]
+radios[1].set_active(True)
+click(vis(), "Restore From This Backup")
+assert pump(lambda: inst, 3)
+wiz = inst[0]
+pump(timeout=0.4)
+assert tag() == "passphrase" and wiz.picked == "work-laptop", tag()
+assert [c for c in calls if c[0] == "signin.start"] == [("signin.start",)], calls  # signed in once
+assert CONF.exists(), "the setup wizard's cleanup must not delete the conf the restore wizard now uses"
+assert wiz.token == TOKEN and "SECRET" not in " ".join(labels(wiz.get_child()))
+shot("r15-handover-passphrase")
+wiz.pw_row.set_text("right-pass")
+click(vis(), "Check")
+assert pump(lambda: tag() == "what")
+assert ("check", "right-pass", "work-laptop") in calls
+# closing before restoring removes the conf this run created
+wiz.force_close()
+pump(timeout=0.4)
+assert not CONF.exists(), "token left behind after bailing out"
+
+# a conf that was already there is never deleted
+CONF.write_text("[mine]\n")
+found[:] = [OLD]
+start()
+sign_in("passphrase")
+wiz.force_close()
+pump(timeout=0.4)
+assert CONF.read_text().startswith("[mine]")
+CONF.unlink()
+
+# closing mid-way (at the passphrase page) removes a conf created in this run
+found[:] = [OLD]
+start()
+sign_in("passphrase")
+assert CONF.exists()
+wiz.force_close()
+pump(timeout=0.4)
+assert not CONF.exists()
+
+print("RESTORE OK")
+'''
+
+WIZARD_SCRIPT = PRELUDE + SETUP_BODY
+RESTORE_SCRIPT = PRELUDE + RESTORE_BODY
+
+
+def run_broadway(env, script, expect):
     if not shutil.which("gtk4-broadwayd"):
         pytest.skip("gtk4-broadwayd not available")
     home = env / "home"
@@ -559,13 +996,21 @@ def test_setup_wizard_walkthrough(env, monkeypatch):
                  PYTHONPATH=str(Path(__file__).parent.parent))
         e.pop("WAYLAND_DISPLAY", None)
         e.pop("DISPLAY", None)
-        p = subprocess.run([sys.executable, "-c", WIZARD_SCRIPT, str(home)], env=e, capture_output=True, text=True,
-                           timeout=120)
+        p = subprocess.run([sys.executable, "-c", script, str(home)], env=e, capture_output=True, text=True,
+                           timeout=180)
     finally:
         bw.terminate()
     if p.returncode == 77:
         pytest.skip("GTK 4 / libadwaita not available")
     assert p.returncode == 0, p.stdout + p.stderr
-    assert "WIZARD OK" in p.stdout
+    assert expect in p.stdout
     assert "Traceback" not in p.stderr and "g_value" not in p.stderr, p.stderr
     print(p.stderr)  # errors inside signal handlers do not fail the script
+
+
+def test_setup_wizard_walkthrough(env):
+    run_broadway(env, WIZARD_SCRIPT, "WIZARD OK")
+
+
+def test_restore_wizard_walkthrough(env):
+    run_broadway(env, RESTORE_SCRIPT, "RESTORE OK")

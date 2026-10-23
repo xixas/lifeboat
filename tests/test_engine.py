@@ -359,3 +359,48 @@ def test_two_devices_share_one_drive_root_without_clobbering(tmp_path, make_cfg,
         assert (tmp_path / "drive" / name / "docs" / f"{name}.txt").read_text() == name
     assert engine.run_backup(a, now=clock(120))["ok"]
     assert not (tmp_path / "drive" / "macbook" / "_old").exists()
+
+
+# ---------------------------------------------------------------- retired jobs stay restorable
+def seed_manifest(tmp_path, jobs, retired=None):
+    p = tmp_path / "drive" / "thinkpad" / "manifest.json"
+    p.parent.mkdir(parents=True)
+    doc = {"format": 1, "device": "thinkpad", "jobs": jobs}
+    if retired:
+        doc["retired"] = retired
+    p.write_text(json.dumps(doc))
+    return p
+
+
+def pics(tmp_path):
+    return {"name": "pictures", "source": "~/Pictures", "dest": f"localdrv:{tmp_path}/drive/thinkpad/Pictures",
+            "old": f"localdrv:{tmp_path}/old", "encrypted": False}
+
+
+def test_a_job_dropped_from_the_config_is_carried_over_as_retired_once_and_keeps_its_since(tmp_path, make_cfg, clock):
+    cfg = make_cfg(device=device(tmp_path))
+    p = seed_manifest(tmp_path, [pics(tmp_path)])
+    first = engine.run_backup(cfg, now=clock(0))
+    doc = json.loads(p.read_text())
+    assert [j["name"] for j in doc["jobs"]] == ["docs"]
+    assert doc["retired"] == [{**pics(tmp_path), "since": first["time"]}]
+    engine.run_backup(cfg, now=clock(60))
+    doc2 = json.loads(p.read_text())
+    assert doc2["retired"] == doc["retired"]  # carried over once, `since` preserved
+
+
+def test_a_job_back_in_the_config_is_never_retired(tmp_path, make_cfg, clock):
+    cfg = make_cfg(device=device(tmp_path))
+    docs = {"name": "docs", "source": "~/x", "dest": "d", "old": "o", "encrypted": False}
+    p = seed_manifest(tmp_path, [], retired=[{**docs, "since": "2026-01-01T00:00:00+00:00"}, {**pics(tmp_path), "since": "2026-01-01T00:00:00+00:00"}])
+    engine.run_backup(cfg, now=clock())
+    doc = json.loads(p.read_text())
+    assert [j["name"] for j in doc["retired"]] == ["pictures"]
+
+
+def test_no_retired_key_without_retired_jobs_and_an_unreadable_manifest_is_not_overwritten(tmp_path, make_cfg, clock):
+    cfg = make_cfg(device=device(tmp_path))
+    engine.run_backup(cfg, now=clock())
+    assert "retired" not in json.loads((tmp_path / "drive" / "thinkpad" / "manifest.json").read_text())
+    bad = make_cfg(device=device(tmp_path, manifest="nosuchremote:thinkpad/manifest.json"))
+    assert engine.upload_manifest(bad, {"time": "t", "ok": True})["ok"] is False

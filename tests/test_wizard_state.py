@@ -1,6 +1,18 @@
 import os
+from datetime import UTC, datetime, timedelta
 
-from lifeboat.app.wizard_state import DEFAULT_TIME, Choices, daily_times, fmt_size, folders_text, tilde, validate_device_name
+from lifeboat.app.wizard_state import (
+    DEFAULT_TIME,
+    Choices,
+    daily_times,
+    fmt_size,
+    folders_text,
+    job_label,
+    keep_backing_up_default,
+    since_text,
+    tilde,
+    validate_device_name,
+)
 
 F = {"key": "documents", "label": "Documents", "path": "/h/Documents", "default_on": True, "secret": False}
 K = {"key": "ssh", "label": "SSH keys", "path": "/h/.ssh", "default_on": True, "secret": True}
@@ -75,3 +87,24 @@ def test_tilde():
     home = os.path.expanduser("~")
     assert tilde(home + "/Documents") == "~/Documents"
     assert tilde("/srv/data") == "/srv/data"
+
+
+def test_job_label_names_a_manifest_job_for_people():
+    assert job_label("documents") == "Documents"
+    assert job_label("ssh-keys") == "SSH keys"
+    assert job_label("gpg-keys") == "GPG keys"
+    assert job_label("my-stuff-old") == "My stuff old"
+
+
+def test_keep_backing_up_defaults_on_only_when_the_old_laptop_looks_gone():
+    now = datetime(2026, 10, 23, 12, 0, tzinfo=UTC)
+    iso = lambda h: (now - timedelta(hours=h)).isoformat()  # noqa: E731
+    assert keep_backing_up_default({"time": iso(30)}, now) is True
+    assert keep_backing_up_default({"time": iso(2)}, now) is False
+    assert keep_backing_up_default({"time": iso(24.5)}, now) is True
+    assert keep_backing_up_default({}, now) is True  # no readable time: nobody is backing up
+
+
+def test_since_text():
+    assert since_text("2026-10-02T09:00:00+00:00") == "Not backed up since 2 Oct 2026"
+    assert since_text(None) == "Not backed up from the old laptop"

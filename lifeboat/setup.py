@@ -421,13 +421,9 @@ def unique_device_name(base: str, existing: list[str]) -> str:
     return name
 
 
-def write_wizard_config(path: Path, device: str, choices: list[dict], daily_at: str,
-                        existing_devices: list[str] | None = None) -> None:
-    """Write a NEW config.toml for this device (never replaces one). Validated as a whole before anything is written.
-    A device name already used in this account would share (and prune) another laptop's folder, so it is refused."""
+def _write_new_config(path: Path, device: str, daily_at: str, jobs: list[Job]) -> None:
+    """Write a NEW config.toml for `device` with these jobs (never replaces one). Validated as a whole before anything is written."""
     path = Path(path)
-    if device in (existing_devices or []):
-        raise SetupError(f"The device name {device!r} is already used by another laptop on this account.")
     if path.exists():
         raise ConfigError(f"{path} already exists; Lifeboat will not replace it")
     if not NAME_RE.match(device):
@@ -438,7 +434,7 @@ def write_wizard_config(path: Path, device: str, choices: list[dict], daily_at: 
     head = (f"[device]\nname = {q(device)}\nmanifest = {q(f'{DRIVE_REMOTE}:{drive_root()}/{device}/manifest.json')}\n"
             f"probe = {q(f'{CRYPT_REMOTE}:{device}/.lifeboat-probe')}\n\n"
             f"[rclone]\nconfig = {q(str(rclone_conf_path()), ensure_ascii=False)}\n\n[schedule]\ndaily_at = {q(daily_at)}\n")
-    text = head + "".join("\n" + render_job_block(wizard_job(device, c)) for c in choices)
+    text = head + "".join("\n" + render_job_block(j) for j in jobs)
     validate_text(text, path)
     path.parent.mkdir(parents=True, exist_ok=True)
     try:
@@ -447,6 +443,42 @@ def write_wizard_config(path: Path, device: str, choices: list[dict], daily_at: 
         raise ConfigError(f"{path} already exists; Lifeboat will not replace it") from None
     with os.fdopen(fd, "w", encoding="utf-8") as f:
         f.write(text)
+
+
+def write_wizard_config(path: Path, device: str, choices: list[dict], daily_at: str,
+                        existing_devices: list[str] | None = None) -> None:
+    """Write a NEW config.toml for this device (never replaces one).
+    A device name already used in this account would share (and prune) another laptop's folder, so it is refused."""
+    if device in (existing_devices or []):
+        raise SetupError(f"The device name {device!r} is already used by another laptop on this account.")
+    _write_new_config(path, device, daily_at, [wizard_job(device, c) for c in choices])
+
+
+def _manifest_jobs(manifest: dict, retired: bool = False) -> list[Job]:
+    """The manifest's jobs; with retired=True also those no longer backed up from the device (still on Drive, restorable)."""
+    try:
+        return [Job(name=j["name"], source=j["source"], dest=j["dest"], old=j["old"], exclude=list(JUNK_EXCLUDES),
+                    encrypted=bool(j.get("encrypted"))) for j in manifest["jobs"] + (manifest.get("retired", []) if retired else [])]
+    except (KeyError, TypeError):
+        raise ConfigError("The backup's manifest is incomplete.") from None
+
+
+def config_from_manifest(path: Path, manifest: dict, daily_at: str, names: list[str] | None = None) -> None:
+    """Write a NEW config.toml that continues a restored backup: the same device name (so the same Drive folder, manifest
+    and probe) and the manifest's jobs exactly as stored (dest and old unchanged, sources keep their `~`). `names`
+    limits it to those jobs: a folder that was not restored must never be synced over its backup."""
+    jobs = [j for j in _manifest_jobs(manifest) if names is None or j.name in names]
+    try:
+        device = manifest["device"]
+    except (KeyError, TypeError):
+        raise ConfigError("The backup's manifest is incomplete.") from None
+    _write_new_config(path, device, daily_at, jobs)
+
+
+def restore_config(manifest: dict, conf: Path) -> Config:
+    """An in-memory Config that reads from the manifest's own Drive locations, for restore_jobs. It never touches disk,
+    so a laptop that continues as a NEW device still restores from the old device's folders."""
+    return Config(jobs=_manifest_jobs(manifest, retired=True), rclone_config=str(conf), device_name=str(manifest.get("device", "")))
 
 
 # ---------------------------------------------------------------- restore

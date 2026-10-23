@@ -650,3 +650,75 @@ def test_abandoned_signin_does_not_orphan_rclone(fake_rclone):
     del si
     gc.collect()
     assert not pid_alive(pid)
+
+
+# ---------------------------------------------------------------- config from a manifest (restore, keep backing up)
+def manifest_for(device="old-laptop", root=None):
+    root = root or setup.drive_root()
+    base, secure = f"lifeboat:{root}/{device}", f"lifeboat-secure:{device}"
+    return {"format": 1, "device": device, "time": "2026-10-01T10:00:00+00:00", "ok": True, "jobs": [
+        {"name": "documents", "source": "~/Documents", "dest": f"{base}/Documents", "old": f"{base}/_old", "encrypted": False},
+        {"name": "ssh-keys", "source": "~/.ssh", "dest": f"{secure}/ssh-keys", "old": f"{secure}/_old", "encrypted": True}]}
+
+
+def test_config_from_manifest_round_trips_device_and_jobs(wiz):
+    m = manifest_for()
+    setup.config_from_manifest(wiz, m, "09:00")
+    cfg = config.load_config(wiz)
+    assert (cfg.device_name, cfg.daily_at) == ("old-laptop", "09:00")
+    assert cfg.manifest == f"lifeboat:{setup.drive_root()}/old-laptop/manifest.json"
+    assert cfg.probe == "lifeboat-secure:old-laptop/.lifeboat-probe"
+    assert cfg.rclone_config == str(wiz.parent / "rclone.conf")
+    assert [(j.name, j.source, j.dest, j.old, j.encrypted) for j in cfg.jobs] == [
+        (j["name"], j["source"], j["dest"], j["old"], j["encrypted"]) for j in m["jobs"]]
+    assert all(j.source.startswith("~/") for j in cfg.jobs)  # never expanded to this machine's home
+    assert "Lifeboat-recovery-kit*.pdf" in cfg.jobs[0].exclude
+
+
+def test_config_from_manifest_refuses_an_existing_config(wiz):
+    wiz.parent.mkdir(parents=True)
+    wiz.write_text("mine")
+    with pytest.raises(config.ConfigError, match="already exists"):
+        setup.config_from_manifest(wiz, manifest_for(), "13:00")
+    assert wiz.read_text() == "mine"
+
+
+@pytest.mark.parametrize("edit", [lambda m: m.update(device="bad name"), lambda m: m.update(jobs=[]),
+                                  lambda m: m["jobs"][0].pop("dest"), lambda m: m.pop("device")])
+def test_config_from_manifest_validates_before_writing(wiz, edit):
+    m = manifest_for()
+    edit(m)
+    with pytest.raises(config.ConfigError):
+        setup.config_from_manifest(wiz, m, "13:00")
+    assert not wiz.exists()
+
+
+def test_restore_config_reads_from_the_manifests_own_locations(fake_home):
+    conf = fake_home / "rclone.conf"
+    cfg = setup.restore_config(manifest_for("old-laptop"), conf)
+    assert cfg.rclone_config == str(conf) and cfg.device_name == "old-laptop"
+    assert [j.name for j in cfg.jobs] == ["documents", "ssh-keys"]
+    assert cfg.jobs[0].dest == f"lifeboat:{setup.drive_root()}/old-laptop/Documents"  # the OLD device's folder, whatever this laptop is called
+    with pytest.raises(config.ConfigError):
+        setup.restore_config({"device": "x"}, conf)
+
+
+def test_config_from_manifest_keeps_only_the_named_jobs(wiz):
+    setup.config_from_manifest(wiz, manifest_for(), "13:00", names=["ssh-keys"])
+    cfg = config.load_config(wiz)
+    assert [j.name for j in cfg.jobs] == ["ssh-keys"] and cfg.device_name == "old-laptop"
+
+
+@pytest.mark.parametrize("names", [[], ["nope"]])
+def test_config_from_manifest_refuses_a_selection_with_no_jobs(wiz, names):
+    with pytest.raises(config.ConfigError):
+        setup.config_from_manifest(wiz, manifest_for(), "13:00", names=names)
+    assert not wiz.exists()
+
+
+def test_retired_jobs_are_restorable_but_never_written_to_a_config(wiz, fake_home):
+    m = manifest_for()
+    m["retired"] = [{**m["jobs"][0], "name": "pictures", "source": "~/Pictures", "since": "2026-10-02T09:00:00+00:00"}]
+    assert [j.name for j in setup.restore_config(m, fake_home / "r.conf").jobs] == ["documents", "ssh-keys", "pictures"]
+    setup.config_from_manifest(wiz, m, "13:00")
+    assert [j.name for j in config.load_config(wiz).jobs] == ["documents", "ssh-keys"]

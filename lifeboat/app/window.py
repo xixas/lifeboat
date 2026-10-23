@@ -12,6 +12,7 @@ from gi.repository import Adw, Gio, GLib, Gtk  # noqa: E402
 from lifeboat import APP_ID, engine  # noqa: E402
 from lifeboat.app.pages import PAGE_ICONS, PAGE_NAMES, PagesMixin  # noqa: E402
 from lifeboat.app.reader import read_lines  # noqa: E402
+from lifeboat.app.restore import RestoreWizard  # noqa: E402
 from lifeboat.app.widgets import CSS, ICONS, copy_text, spinner  # noqa: E402
 from lifeboat.app.wizard import SetupWizard  # noqa: E402
 from lifeboat.config import ConfigError, config_path, load_config  # noqa: E402
@@ -184,8 +185,8 @@ class Win(PagesMixin, Adw.ApplicationWindow):
     def open_setup_wizard(self):
         SetupWizard(self).present(self)
 
-    def open_restore_wizard(self, device=None):
-        self.toast("Coming soon")  # slice 5
+    def open_restore_wizard(self, device=None, handover=None):
+        RestoreWizard(self, device, handover).present(self)
 
     # -- actions
     @staticmethod

@@ -149,16 +149,39 @@ def run_settings(cfg: Config, emit: Emit | None = None) -> bool:
     return rc == 0
 
 
-def manifest_doc(cfg: Config, state: dict) -> dict:
-    """What a new laptop needs to find and restore this device's backup. Paths only: no file lists, no secrets."""
-    return {"format": 1, "device": cfg.device_name, "host": socket.gethostname(), "lifeboat": __version__,
-            "time": state["time"], "ok": state["ok"],
-            "jobs": [{"name": j.name, "source": j.source, "dest": j.dest, "old": j.old, "encrypted": j.encrypted}
-                     for j in cfg.jobs]}
+def _job_doc(j: Job) -> dict:
+    return {"name": j.name, "source": j.source, "dest": j.dest, "old": j.old, "encrypted": j.encrypted}
+
+
+def manifest_doc(cfg: Config, state: dict, previous: dict | None = None) -> dict:
+    """What a new laptop needs to find and restore this device's backup. Paths only: no file lists, no secrets.
+    Jobs that the previous manifest listed but the config no longer has are kept under "retired" (with `since`, the
+    time they were first carried over), because their data is still on Drive and a restore must still find it."""
+    doc = {"format": 1, "device": cfg.device_name, "host": socket.gethostname(), "lifeboat": __version__,
+           "time": state["time"], "ok": state["ok"], "jobs": [_job_doc(j) for j in cfg.jobs]}
+    current = {j.name for j in cfg.jobs}
+    retired: dict[str, dict] = {}
+    for j in (previous or {}).get("jobs", []):
+        retired[j["name"]] = {**j, "since": state["time"]}
+    for j in (previous or {}).get("retired", []):
+        retired[j["name"]] = j  # its original `since` wins
+    kept = [j for n, j in retired.items() if n not in current]
+    if kept:
+        doc["retired"] = kept
+    return doc
 
 
 def upload_manifest(cfg: Config, state: dict) -> dict:
-    rc, _ = rclone(cfg, ["rcat", cfg.manifest] + COMMON, input=json.dumps(manifest_doc(cfg, state), indent=2) + "\n", timeout=None)
+    rc, text = rclone(cfg, ["cat", cfg.manifest], timeout=60)
+    if rc not in (0, 3):  # not "missing": we could not read it, and writing now could drop the retired list
+        return {"ok": False, "rc": rc}
+    try:
+        previous = json.loads(text) if rc == 0 else None
+    except ValueError:
+        previous = None
+    if not isinstance(previous, dict):
+        previous = None
+    rc, _ = rclone(cfg, ["rcat", cfg.manifest] + COMMON, input=json.dumps(manifest_doc(cfg, state, previous), indent=2) + "\n", timeout=None)
     return {"ok": rc == 0, "rc": rc}
 
 

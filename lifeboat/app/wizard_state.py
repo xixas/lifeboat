@@ -80,6 +80,9 @@ class Choices:
     def is_on(self, path: str) -> bool:
         return self._on[path]
 
+    def hint(self, path: str) -> str:
+        return self._f[path].get("hint", "")
+
     def toggle(self, path: str, on: bool) -> None:
         self._on[path] = on
         self._touched.add(path)

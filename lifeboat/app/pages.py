@@ -100,6 +100,8 @@ class PagesMixin:
             sub = f"{j['source']} → {j['dest']}" + (f" · {j['seconds']} s" if j["seconds"] is not None else "")
             if j["rc"] is None:
                 badge = label("Not run", "dim-label")
+            elif j["skipped"]:
+                badge = label("Empty", "dim-label")
             else:
                 badge = label("OK" if j["rc"] == 0 else f"Failed ({j['rc']})", "success" if j["rc"] == 0 else "error")
             r = row(j["name"], sub, [badge])

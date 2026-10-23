@@ -74,7 +74,8 @@ def cmd_status(a) -> int:
     print("last run:", f"{last['time']} ({'ok' if last['ok'] else 'FAILED'}{', dry run' if last['dry_run'] else ''})"
           if last else "never")
     for j in st["jobs"]:
-        res = "not run" if j["rc"] is None else "ok" if j["rc"] == 0 else f"failed (rc {j['rc']})"
+        res = ("not run" if j["rc"] is None else "empty, nothing to back up yet" if j["skipped"]
+               else "ok" if j["rc"] == 0 else f"failed (rc {j['rc']})")
         print(f"  {j['name']}: {j['source']} -> {j['dest']}  [{res}]")
     return 0
 

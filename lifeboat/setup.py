@@ -372,8 +372,12 @@ def folder_size(path: str | os.PathLike, limit_s: float = 10) -> tuple[int, bool
 
 
 def with_size(folder: dict, size: int, complete: bool) -> dict:
-    """A copy of folder with its size; a folder over 5 GB, or too big to measure in time, starts switched off."""
-    return {**folder, "size": size, "size_complete": complete, "default_on": folder["default_on"] and complete and size <= LARGE_BYTES}
+    """A copy of folder with its size; a folder over 5 GB, or too big to measure in time, starts switched off.
+    A measured-empty folder stays on and gets a hint."""
+    out = {**folder, "size": size, "size_complete": complete, "default_on": folder["default_on"] and complete and size <= LARGE_BYTES}
+    if complete and size == 0:
+        out["hint"] = "Empty — backed up once you add files"
+    return out
 
 
 def default_device_name() -> str:

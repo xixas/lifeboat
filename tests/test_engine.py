@@ -1,5 +1,7 @@
 import json
+import os
 import subprocess
+import time
 from datetime import datetime
 
 import pytest
@@ -136,6 +138,22 @@ def test_restore_latest_and_from_version(tmp_path, make_cfg, clock):
     engine.run_backup(cfg, now=clock(120))
     assert engine.restore(cfg, "docs", one, files=["g.txt"]) == 0
     assert sorted(p.name for p in one.iterdir()) == ["g.txt"]
+
+
+def test_restore_keep_newer_never_overwrites_a_newer_local_file(tmp_path, make_cfg, clock):
+    cfg = make_cfg()
+    (tmp_path / "src" / "f.txt").write_text("backed up")
+    (tmp_path / "src" / "g.txt").write_text("backed up")
+    engine.run_backup(cfg, now=clock())
+    target = tmp_path / "target"
+    target.mkdir()
+    (target / "f.txt").write_text("edited after the backup")
+    os.utime(target / "f.txt", (time.time() + 3600, time.time() + 3600))
+    assert engine.restore(cfg, "docs", target, keep_newer=True) == 0
+    assert read(target / "f.txt") == "edited after the backup"
+    assert read(target / "g.txt") == "backed up"  # missing files still come back
+    assert engine.restore(cfg, "docs", target) == 0  # default is unchanged: the backup wins
+    assert read(target / "f.txt") == "backed up"
 
 
 def test_restore_rejects_bad_version_and_unknown_job(tmp_path, make_cfg):

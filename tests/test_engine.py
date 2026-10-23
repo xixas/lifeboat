@@ -273,6 +273,21 @@ def test_empty_source_with_missing_dest_is_skipped_ok(tmp_path, make_cfg, clock)
     assert "docs: skipped — folder is empty, nothing to back up yet" in log and "docs rc=0" in log
 
 
+def test_a_skipped_job_restores_cleanly_and_skips_again(tmp_path, make_cfg, clock):
+    cfg = make_cfg()
+    engine.run_backup(cfg, now=clock())
+    assert engine.restore(cfg, cfg.jobs[0], tmp_path / "out") == 0
+    st = engine.run_backup(cfg, now=clock(60))
+    assert st["ok"] and st["jobs"][0]["skipped"] is True
+
+
+def test_a_dry_run_skip_creates_nothing(tmp_path, make_cfg, clock):
+    cfg = make_cfg()
+    st = engine.run_backup(cfg, dry_run=True, now=clock())
+    assert st["jobs"][0]["skipped"] is True
+    assert engine.restore(cfg, cfg.jobs[0], tmp_path / "out") != 0
+
+
 def test_empty_source_is_refused_when_dest_listing_fails(tmp_path, make_cfg, clock, monkeypatch):
     cfg = make_cfg()
     real = engine.rclone

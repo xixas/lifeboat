@@ -223,14 +223,16 @@ def run_backup(cfg: Config, dry_run: bool = False, now: datetime | None = None, 
         for job in cfg.jobs:
             t0 = time.monotonic()
             src = os.path.expanduser(job.source)
-            skipped = os.path.isdir(src) and not has_files(src) and dest_empty(cfg, job, env)
+            empty = not has_files(src)
+            skipped = empty and os.path.isdir(src) and dest_empty(cfg, job, env)
             if skipped:
                 msg = f"{job.name}: skipped — folder is empty, nothing to back up yet"
                 log.write(msg + "\n")
                 if emit:
                     emit(msg)
-                rc = 0
-            elif not has_files(src):
+                # an empty destination folder keeps restore working for this job
+                rc = 0 if dry_run else rclone(cfg, ["mkdir", job.dest], env=env)[0]
+            elif empty:
                 msg = f"{job.name}: refusing to sync: source {src} is missing or empty (unmounted drive or typo?) — nothing was changed"
                 log.write(msg + "\n")
                 if emit:

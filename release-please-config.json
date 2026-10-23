@@ -52,6 +52,12 @@
           "section": "Refactoring",
           "hidden": true
         }
+      ],
+      "extra-files": [
+        {
+          "type": "generic",
+          "path": "lifeboat.spec"
+        }
       ]
     }
   }

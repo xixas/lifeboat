@@ -1,0 +1,28 @@
+# https://packit.dev/docs/configuration
+specfile_path: lifeboat.spec
+upstream_package_name: lifeboat
+downstream_package_name: lifeboat
+upstream_tag_template: "v{version}"
+
+jobs:
+  # Release builds: published to the xixas/lifeboat COPR project when a GitHub release is published.
+  - job: copr_build
+    trigger: release
+    owner: xixas
+    project: lifeboat
+    update_release: false  # keep 0.3.2-1.fcNN instead of a timestamped release
+    targets:
+      - fedora-43-x86_64
+      - fedora-43-aarch64
+      - fedora-44-x86_64
+      - fedora-44-aarch64
+      - fedora-45-x86_64
+      - fedora-45-aarch64
+      - fedora-rawhide-x86_64
+      - fedora-rawhide-aarch64
+
+  # Spec CI: every PR builds in Packit's own COPR namespace.
+  - job: copr_build
+    trigger: pull_request
+    targets:
+      - fedora-stable

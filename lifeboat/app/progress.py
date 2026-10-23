@@ -17,7 +17,7 @@ from lifeboat.config import ConfigError, load_config  # noqa: E402
 FileDialog = Gtk.FileDialog
 FINISHING = "Finishing up"
 REASONS = {
-    "missing": "This folder doesn't exist any more. Was it renamed or moved? Nothing was changed.",
+    "missing": "This folder doesn't exist any more. Was it renamed or moved, or is its drive unplugged? Nothing was changed.",
     "empty_with_backup": "Folder is empty but its backup isn't. Is the drive plugged in? Nothing was changed.",
     "dest_unreadable": "Couldn't check the backup on Google Drive. Check your connection and try again. Nothing was changed.",
     "mkdir_failed": "Couldn't create its folder on Google Drive.",
@@ -214,6 +214,8 @@ class BackupProgress:
         if self.finished:
             return
         self.finished = True
+        self.dlg.set_can_close(True)  # first, so nothing below can leave the dialog stuck open
+        self.win.set_busy(False)
         for s in self._rows():
             if s.state == "waiting" and s is self.finishing:
                 self.list.remove(s.row)  # it never began: there was nothing to finish up
@@ -237,8 +239,6 @@ class BackupProgress:
         self.head.set_visible(True)
         self.retry.set_visible(not ok)
         self.wt.set_subtitle("Finished" if ok else "Finished with problems")
-        self.dlg.set_can_close(True)
-        self.win.set_busy(False)
         self.win.refresh()
 
     # -- log

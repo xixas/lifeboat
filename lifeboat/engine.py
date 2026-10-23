@@ -137,6 +137,12 @@ def has_files(path: str) -> bool:
     return any(files for _root, _dirs, files in os.walk(path))
 
 
+def dest_empty(cfg: Config, job: Job, env: dict) -> bool:
+    """True if the destination lists nothing. A missing one (rclone rc 3) counts as empty; any other failure does not."""
+    rc, out = rclone(cfg, ["lsf", job.dest, "--max-depth", "1"], env=env)
+    return rc == 3 or (rc == 0 and not out.strip())
+
+
 def run_settings(cfg: Config, emit: Emit | None = None) -> bool:
     """Run the optional settings-snapshot command and record settings.json. True if ok or not configured."""
     if not cfg.settings_command:
@@ -217,7 +223,22 @@ def run_backup(cfg: Config, dry_run: bool = False, now: datetime | None = None, 
         for job in cfg.jobs:
             t0 = time.monotonic()
             src = os.path.expanduser(job.source)
-            if not has_files(src):
+            empty = not has_files(src)
+            skipped = empty and os.path.isdir(src) and dest_empty(cfg, job, env)
+            if skipped:
+                msg = f"{job.name}: skipped — folder is empty, nothing to back up yet"
+                log.write(msg + "\n")
+                if emit:
+                    emit(msg)
+                # an empty destination folder keeps restore working for this job
+                rc = 0 if dry_run else rclone(cfg, ["mkdir", job.dest], env=env)[0]
+                if rc:
+                    skipped = False
+                    msg = f"{job.name}: could not create the empty backup folder {job.dest} (rclone exit {rc})"
+                    log.write(msg + "\n")
+                    if emit:
+                        emit(msg)
+            elif empty:
                 msg = f"{job.name}: refusing to sync: source {src} is missing or empty (unmounted drive or typo?) — nothing was changed"
                 log.write(msg + "\n")
                 if emit:
@@ -226,7 +247,7 @@ def run_backup(cfg: Config, dry_run: bool = False, now: datetime | None = None, 
             else:
                 args = job_args(cfg, job, stamp) + COMMON + (["--dry-run"] if dry_run else [])
                 rc = stream(rclone_argv(cfg, args), env, log, emit)
-            results.append({"name": job.name, "rc": rc, "seconds": int(time.monotonic() - t0)})
+            results.append({"name": job.name, "rc": rc, "seconds": int(time.monotonic() - t0), "skipped": skipped})
             line = f"{job.name} rc={rc}"
             log.write(line + "\n")
             if emit:
@@ -367,7 +388,8 @@ def status(cfg: Config) -> dict:
     last = read_json(sd / "last-run.json")
     results = {r["name"]: r for r in (last or {}).get("jobs", [])}
     jobs = [{"name": j.name, "source": j.source, "dest": j.dest, "old": j.old, "encrypted": j.encrypted,
-             "rc": results.get(j.name, {}).get("rc"), "seconds": results.get(j.name, {}).get("seconds")}
+             "rc": results.get(j.name, {}).get("rc"), "seconds": results.get(j.name, {}).get("seconds"),
+             "skipped": results.get(j.name, {}).get("skipped")}
             for j in cfg.jobs]
     found = shutil.which("rclone") is not None
     listed = rclone(cfg, ["listremotes"], timeout=20)[1].split() if found else []

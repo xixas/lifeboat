@@ -33,6 +33,14 @@ def test_run_status_versions_restore_via_cli(env, make_cfg, capsys):
     assert cli.main(["prune"]) == 0
 
 
+def test_status_says_an_empty_folder_was_skipped(env, make_cfg, capsys):
+    write_cfg(env, make_cfg)
+    assert cli.main(["run"]) == 0
+    capsys.readouterr()
+    assert cli.main(["status"]) == 0
+    assert "[empty, nothing to back up yet]" in capsys.readouterr().out
+
+
 def test_missing_config_exits_2(env, capsys):
     assert cli.main(["status"]) == 2
     assert "no config file" in capsys.readouterr().err

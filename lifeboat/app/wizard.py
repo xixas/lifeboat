@@ -163,7 +163,7 @@ class SetupWizard(AccountDialog):
             if self.dead or row is None:
                 return
             self.choices.set_size(path, size, complete)
-            row.set_subtitle(f"{tilde(path)} · {fmt_size(size, complete)}")
+            row.set_subtitle(f"{tilde(path)} · {self.choices.hint(path) or fmt_size(size, complete)}")
             if row.get_active() != self.choices.is_on(path):
                 self._silent = True  # a size-driven change must not count as a user toggle
                 row.set_active(self.choices.is_on(path))
@@ -241,7 +241,7 @@ class SetupWizard(AccountDialog):
         buttons.append(copy)
         for w in (self.kit_label, buttons, lb):
             box.append(w)
-        sp = Adw.StatusPage(icon_name="dialog-password-symbolic", title="Your Recovery Kit",
+        sp = Adw.StatusPage(icon_name="dialog-password-symbolic", title="Your Recovery Kit", css_classes=["compact"],
                             description="This passphrase unlocks your encrypted keys. It cannot be recovered, "
                                         "so save the PDF and store it somewhere other than this laptop.")
         sp.set_child(box)

@@ -265,6 +265,67 @@ def test_empty_or_missing_source_is_refused(tmp_path, make_cfg, clock):
     assert "refusing to sync" in (engine.state_dir() / "run.log").read_text()
 
 
+def test_empty_source_with_missing_dest_is_skipped_ok(tmp_path, make_cfg, clock):
+    cfg = make_cfg()
+    st = engine.run_backup(cfg, now=clock())
+    assert st["ok"] and st["jobs"][0]["rc"] == 0 and st["jobs"][0]["skipped"] is True
+    log = read(engine.state_dir() / "run.log")
+    assert "docs: skipped — folder is empty, nothing to back up yet" in log and "docs rc=0" in log
+
+
+def test_a_skipped_job_restores_cleanly_and_skips_again(tmp_path, make_cfg, clock):
+    cfg = make_cfg()
+    engine.run_backup(cfg, now=clock())
+    assert engine.restore(cfg, cfg.jobs[0], tmp_path / "out") == 0
+    st = engine.run_backup(cfg, now=clock(60))
+    assert st["ok"] and st["jobs"][0]["skipped"] is True
+
+
+def test_a_failed_mkdir_is_a_failure_not_a_skip(tmp_path, make_cfg, clock, monkeypatch):
+    cfg = make_cfg()
+    real = engine.rclone
+    monkeypatch.setattr(engine, "rclone", lambda c, args, **kw: (1, "") if args[0] == "mkdir" else real(c, args, **kw))
+    st = engine.run_backup(cfg, now=clock())
+    assert st["ok"] is False and st["jobs"][0]["rc"] == 1 and st["jobs"][0]["skipped"] is False
+    assert "could not create the empty backup folder" in read(engine.state_dir() / "run.log")
+
+
+def test_a_dry_run_skip_creates_nothing(tmp_path, make_cfg, clock):
+    cfg = make_cfg()
+    st = engine.run_backup(cfg, dry_run=True, now=clock())
+    assert st["jobs"][0]["skipped"] is True
+    assert engine.restore(cfg, cfg.jobs[0], tmp_path / "out") != 0
+
+
+def test_empty_source_is_refused_when_dest_listing_fails(tmp_path, make_cfg, clock, monkeypatch):
+    cfg = make_cfg()
+    real = engine.rclone
+    monkeypatch.setattr(engine, "rclone", lambda c, args, **kw: (1, "") if args[0] == "lsf" else real(c, args, **kw))
+    st = engine.run_backup(cfg, now=clock())
+    assert st["ok"] is False and st["jobs"][0]["rc"] == 2 and st["jobs"][0]["skipped"] is False
+    assert "refusing to sync" in read(engine.state_dir() / "run.log")
+
+
+def test_missing_source_is_refused_without_listing_dest(tmp_path, make_cfg, clock, monkeypatch):
+    cfg = make_cfg()
+    (tmp_path / "src").rmdir()
+    calls = []
+    real = engine.rclone
+    monkeypatch.setattr(engine, "rclone", lambda c, args, **kw: calls.append(args) or real(c, args, **kw))
+    st = engine.run_backup(cfg, now=clock())
+    assert st["ok"] is False and st["jobs"][0]["rc"] == 2
+    assert not [a for a in calls if a[0] == "lsf"]
+
+
+def test_status_exposes_skipped_per_job(tmp_path, make_cfg, clock):
+    cfg = make_cfg()
+    engine.run_backup(cfg, now=clock())
+    assert engine.status(cfg)["jobs"][0]["skipped"] is True
+    (tmp_path / "src" / "a.txt").write_text("one")
+    engine.run_backup(cfg, now=clock(60))
+    assert engine.status(cfg)["jobs"][0]["skipped"] is False
+
+
 # ---------------------------------------------------------------- device manifest and probe
 def device(tmp_path, name="thinkpad", probe=False, manifest=None):
     d = {"name": name, "manifest": manifest or f"localdrv:{tmp_path}/drive/{name}/manifest.json"}

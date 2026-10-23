@@ -11,6 +11,7 @@ from gi.repository import Adw, GLib, Gtk  # noqa: E402
 
 from lifeboat import APP_ID, engine, timer  # noqa: E402
 from lifeboat.app.widgets import CSS, ICONS, WORDS, ago, fmt_time, group, label, row  # noqa: E402
+from lifeboat.config import example_config_path  # noqa: E402
 
 # pinned: never run an unpinned latest from npm
 SKILLS_CLI = "skills@1.7.4"
@@ -43,7 +44,7 @@ class PagesMixin:
         return sp
 
     def create_example(self):
-        src = Path(__file__).resolve().parent.parent.parent / "data" / "config.example.toml"
+        src = example_config_path()
         dest = self.data["path"]
         try:
             dest.parent.mkdir(parents=True, exist_ok=True)

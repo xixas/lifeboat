@@ -264,6 +264,21 @@ def timers() -> dict:
     return res
 
 
+def list_remotes(cfg: Config) -> list[dict]:
+    """rclone remotes as [{"name": "gdrive:", "type": "drive"}]. Raises ConfigError if rclone cannot list them."""
+    if not shutil.which("rclone"):
+        raise ConfigError("rclone is not installed")
+    rc, out = rclone(cfg, ["listremotes", "--long"], timeout=20)
+    if rc != 0:
+        raise ConfigError("rclone could not list its remotes (is rclone.conf readable and unlocked?)")
+    remotes = []
+    for line in out.splitlines():
+        name, colon, kind = line.partition(":")
+        if colon:
+            remotes.append({"name": name + ":", "type": kind.strip()})
+    return remotes
+
+
 def remote_names(cfg: Config) -> list[str]:
     seen: list[str] = []
     for j in cfg.jobs:

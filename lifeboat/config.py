@@ -1,8 +1,11 @@
 """Load and validate ~/.config/lifeboat/config.toml."""
 from __future__ import annotations
 
+import json
 import os
 import re
+import shutil
+import tempfile
 import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -159,3 +162,105 @@ def load_config(path: Path | str | None = None) -> Config:
     except tomllib.TOMLDecodeError as e:
         raise ConfigError(f"{p} is not valid TOML: {e}") from None
     return parse(data, p)
+
+
+# ---------------------------------------------------------------- editing config.toml as text
+def example_config_path() -> Path:
+    return Path(__file__).resolve().parent.parent / "data" / "config.example.toml"
+
+
+def default_old(dest: str) -> str:
+    """The versions folder next to dest: gdrive:Backup/Documents -> gdrive:Backup/_old, gdrive:Docs -> gdrive:_old."""
+    head, sep, tail = dest.rstrip("/").partition(":")
+    if not sep:  # a local path
+        return f"{head.rpartition('/')[0]}/_old" if "/" in head else "_old"
+    parent = tail.rpartition("/")[0]
+    return f"{head}{sep}{parent}{'/' if parent else ''}_old"
+
+
+def render_job_block(job: Job) -> str:
+    """A [[jobs]] block; strings use JSON escaping, which is valid for TOML basic strings. Only set keys are written."""
+    lines = ["[[jobs]]"] + [f"{k} = {json.dumps(getattr(job, k), ensure_ascii=False)}" for k in ("name", "source", "dest", "old")]
+    for k in ("exclude", "include"):
+        if getattr(job, k):
+            lines.append(f"{k} = {json.dumps(getattr(job, k), ensure_ascii=False)}")
+    if job.filter_file:
+        lines.append(f"filter_file = {json.dumps(job.filter_file, ensure_ascii=False)}")
+    if job.encrypted:
+        lines.append("encrypted = true")
+    return "\n".join(lines) + "\n"
+
+
+def validate_text(text: str, path: Path | None = None) -> Config:
+    try:
+        return parse(tomllib.loads(text), path)
+    except tomllib.TOMLDecodeError as e:
+        raise ConfigError(f"the edited config would not be valid TOML: {e}") from None
+
+
+def add_job_text(text: str, job: Job) -> str:
+    """text with job appended as a new block. Raises ConfigError if the result would not be a valid config."""
+    new = text.rstrip("\n") + "\n\n" + render_job_block(job)
+    validate_text(new)
+    return new
+
+
+def _segments(text: str) -> list[str]:
+    """Split at table headers (lines starting with '['); comments such as '# [[jobs]]' never split."""
+    segs: list[list[str]] = [[]]
+    for line in text.splitlines(keepends=True):
+        if re.match(r"\s*\[", line):
+            lead = []  # comment lines directly above a header belong to it
+            while segs[-1] and segs[-1][-1].lstrip().startswith("#"):
+                lead.insert(0, segs[-1].pop())
+            segs.append(lead)
+        segs[-1].append(line)
+    return ["".join(s) for s in segs]
+
+
+def _job_name(segment: str) -> str | None:
+    segment = "".join(ln for ln in segment.splitlines(keepends=True) if not ln.lstrip().startswith("#") or ln.strip() == "")
+    if not segment.lstrip().startswith("[[jobs]]"):
+        return None
+    try:
+        return tomllib.loads(segment)["jobs"][0].get("name")
+    except (tomllib.TOMLDecodeError, KeyError, IndexError):
+        return None
+
+
+def remove_job_text(text: str, name: str) -> str:
+    """text without the [[jobs]] block (and the comments directly above it) named `name`. Raises ConfigError for an unknown name or the last job."""
+    segs = _segments(text)
+    hits = [i for i, s in enumerate(segs) if _job_name(s) == name]
+    if not hits:
+        raise ConfigError(f"jobs: no job named {name!r} in the config file")
+    if sum(_job_name(s) is not None for s in segs) < 2:
+        raise ConfigError(f"jobs: {name!r} is the only job; the config needs at least one")
+    new = "".join(s for i, s in enumerate(segs) if i != hits[0])
+    validate_text(new)
+    return new
+
+
+def write_config_text(path: Path, text: str) -> None:
+    """Replace the config atomically (same mode), keeping the previous file as <name>.bak."""
+    validate_text(text, path)
+    path = path.resolve()  # write through a symlink (stow, chezmoi) instead of replacing it
+    mode = path.stat().st_mode & 0o7777
+    shutil.copy2(path, path.with_name(path.name + ".bak"))
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=path.name + ".", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(text)
+            f.flush()
+            os.fsync(f.fileno())
+        os.chmod(tmp, mode)
+        os.replace(tmp, path)
+        dfd = os.open(path.parent, os.O_RDONLY)
+        try:
+            os.fsync(dfd)
+        finally:
+            os.close(dfd)
+    except BaseException:
+        if os.path.exists(tmp):  # already gone if the replace succeeded and only the dir fsync failed
+            os.unlink(tmp)
+        raise

@@ -55,3 +55,104 @@ def test_example_config_is_valid_and_filter_path_is_relative_to_config(tmp_path)
 def test_version_matches_pyproject():
     from pathlib import Path
     assert f'version = "{__version__}"' in (Path(__file__).parent.parent / "pyproject.toml").read_text()
+
+
+BASE = '# my backups\n[schedule]\nkeep_days = 30\n\n[[jobs]]\nname = "a"\nsource = "~/a"\ndest = "r:a"\nold = "r:_old"\n'
+
+
+def test_default_old_is_a_sibling_of_dest():
+    from lifeboat.config import default_old
+    assert default_old("gdrive:Backup/Documents") == "gdrive:Backup/_old"
+    assert default_old("gdrive:Docs") == "gdrive:_old"
+    assert default_old("gdrive:Backup/Docs/") == "gdrive:Backup/_old"
+
+
+def test_add_job_text_appends_a_parseable_block_and_keeps_comments():
+    from lifeboat.config import Job, add_job_text
+    job = Job("b", "~/it's \"b\"", "r:x/b", "r:x/_old", exclude=["*.tmp", "é/**"], encrypted=True)
+    new = add_job_text(BASE, job)
+    assert new.startswith(BASE) and "# my backups" in new
+    cfg = parse(__import__("tomllib").loads(new))
+    assert cfg.jobs[1] == job
+    assert "include" not in new.split('name = "b"')[1] and "filter_file" not in new
+
+
+def test_add_job_text_refuses_invalid_jobs():
+    from lifeboat.config import Job, add_job_text
+    with pytest.raises(ConfigError, match="used twice"):
+        add_job_text(BASE, Job("a", "~/z", "r:z", "r:_old"))
+    with pytest.raises(ConfigError, match="include and exclude"):
+        add_job_text(BASE, Job("c", "~/z", "r:z", "r:_old", include=["x"], exclude=["y"]))
+    with pytest.raises(ConfigError, match="jobs\\[2\\].old"):
+        add_job_text(BASE, Job("c", "~/z", "r:z", "r:z"))
+
+
+TWO = BASE + '\n# [[jobs]]\n# name = "ghost"\n\n[[jobs]]\nname = "b"\nsource = "~/b"\ndest = "r:b"\nold = "r:_old"\n\n[settings]\ncommand = ""\n'
+
+
+def test_remove_job_text_removes_only_the_named_block():
+    from lifeboat.config import remove_job_text
+    new = remove_job_text(TWO, "b")
+    assert [j.name for j in parse(__import__("tomllib").loads(new)).jobs] == ["a"]
+    assert '# [[jobs]]' in new and "[settings]" in new and "# my backups" in new
+
+
+def test_remove_job_text_refusals():
+    from lifeboat.config import remove_job_text
+    with pytest.raises(ConfigError, match="no job named 'ghost'"):
+        remove_job_text(TWO, "ghost")
+    with pytest.raises(ConfigError, match="only job"):
+        remove_job_text(BASE, "a")
+
+
+def test_write_config_text_is_atomic_keeps_mode_and_backup(tmp_path):
+    from lifeboat.config import write_config_text
+    p = tmp_path / "config.toml"
+    p.write_text(BASE)
+    p.chmod(0o600)
+    write_config_text(p, TWO)
+    assert p.read_text() == TWO and p.stat().st_mode & 0o777 == 0o600
+    assert (tmp_path / "config.toml.bak").read_text() == BASE
+    with pytest.raises(ConfigError):
+        write_config_text(p, "jobs = [")
+    assert p.read_text() == TWO and sorted(x.name for x in tmp_path.iterdir()) == ["config.toml", "config.toml.bak"]
+
+
+def test_default_old_for_a_local_dest():
+    from lifeboat.config import default_old
+    assert default_old("/mnt/backup/docs") == "/mnt/backup/_old"
+    assert default_old("/mnt/backup/docs/") == "/mnt/backup/_old"
+
+
+def test_write_config_text_writes_through_a_symlink(tmp_path):
+    from lifeboat.config import write_config_text
+    real = tmp_path / "dotfiles" / "config.toml"
+    real.parent.mkdir()
+    real.write_text(BASE)
+    link = tmp_path / "config.toml"
+    link.symlink_to(real)
+    write_config_text(link, TWO)
+    assert link.is_symlink() and real.read_text() == TWO
+    assert (real.parent / "config.toml.bak").read_text() == BASE and not (tmp_path / "config.toml.bak").exists()
+
+
+def test_remove_job_text_takes_the_leading_comment_with_its_job():
+    from lifeboat.config import remove_job_text
+    text = BASE.replace("[[jobs]]", "# --- a ---\n[[jobs]]") + '\n# --- photos ---\n[[jobs]]\nname = "b"\nsource = "~/b"\ndest = "r:b"\nold = "r:_old"\n'
+    new = remove_job_text(text, "a")
+    assert "# --- photos ---" in new and "# --- a ---" not in new
+    assert "# --- a ---" in remove_job_text(text, "b") and "# --- photos ---" not in remove_job_text(text, "b")
+
+
+def test_write_config_text_fsyncs_before_replace(tmp_path, monkeypatch):
+    import os
+
+    from lifeboat.config import write_config_text
+    calls = []
+    real_fsync, real_replace = os.fsync, os.replace
+    monkeypatch.setattr(os, "fsync", lambda fd: (calls.append("fsync"), real_fsync(fd))[1])
+    monkeypatch.setattr(os, "replace", lambda a, b: (calls.append("replace"), real_replace(a, b))[1])
+    p = tmp_path / "config.toml"
+    p.write_text(BASE)
+    write_config_text(p, TWO)
+    assert calls.index("fsync") < calls.index("replace")

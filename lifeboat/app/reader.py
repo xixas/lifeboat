@@ -1,4 +1,5 @@
 """Read a subprocess pipe line by line without blocking the main loop."""
+import sys
 from collections.abc import Callable
 
 from gi.repository import Gio, GLib
@@ -12,7 +13,10 @@ def read_lines(stream: Gio.InputStream, on_line: Callable[[str], None], on_eof: 
     pending = bytearray()
 
     def emit(raw: bytes) -> None:
-        on_line(ANSI.sub("", raw.decode("utf-8", "replace")))
+        try:
+            on_line(ANSI.sub("", raw.decode("utf-8", "replace")))
+        except Exception as e:  # noqa: BLE001  one bad line must not stop the reads: nothing re-arms them
+            print("line handler failed:", type(e).__name__, file=sys.stderr)  # never the message: it could hold a secret
 
     def on_chunk(st, res):
         try:

@@ -980,6 +980,7 @@ print("RESTORE OK")
 '''
 
 PROGRESS_BODY = r'''
+from gi.repository import Gio
 from lifeboat.app import progress
 
 progress.FileDialog = FakeFileDialog
@@ -1020,6 +1021,8 @@ assert isinstance(r["Photos"].row, Adw.ExpanderRow) and r["Photos"].row.get_expa
 assert "Is the drive plugged in" in r["Photos"].row.get_subtitle()
 assert bp.list.get_row_at_index(1) is r["Photos"].row  # swapped in place, order kept
 ev(event="done", ok=False)
+assert not bp.finished and not bp.retry.get_visible()  # the child may still be running
+bp._ended()
 assert bp.summary.get_label() == "1 folder not backed up", bp.summary.get_label()
 assert bp.summary_sub.get_label() == "The others are safe on Google Drive"
 assert bp.retry.get_visible() and bp.dlg.get_can_close()
@@ -1062,15 +1065,37 @@ ev(event="job_start", name="documents")
 for n in ("documents", "photos", "ssh-keys", "empty"):
     ev(event="job_end", name=n, rc=0, skipped=False, files=1, error="")
 ev(event="done", ok=True)
+bp._ended()
 assert bp.wt.get_subtitle() == "Finished" and bp.summary.get_label() == "Backed up" and bp.summary_sub.get_label() == "4 files copied"
 assert not bp.retry.get_visible() and bp.list.get_row_at_index(4) is None  # no finishing row when nothing finished up
 shot("progress-4-done")
+
+# Try Again via its button: spawns again, and a callback of the old run cannot touch the new one
+spawned = []
+def fake_spawn():
+    spawned.append(1)
+    return Gio.Subprocess.new(["sh", "-c", 'echo hello >&2; echo "$1"', "sh", json.dumps({"event": "done", "ok": True})],
+                              Gio.SubprocessFlags.STDOUT_PIPE | Gio.SubprocessFlags.STDERR_PIPE)
+bp._spawn = fake_spawn
+bp._reset()
+win.set_busy(False)
+ev(event="job_start", name="documents")
+bp.verdict = False
+bp._ended()
+assert bp.retry.get_visible()
+old_gen = bp.gen
+click(bp.dlg.get_child(), "Try Again")
+assert spawned == [1] and bp.gen == old_gen + 1 and not bp.finished
+bp._ended(old_gen)  # the previous run's late eof
+assert not bp.finished and win.busy
+assert pump(lambda: bp.finished), "the new run never finished"
+assert bp.summary.get_label() == "Backed up" and "hello" in bp.buf.get_text(bp.buf.get_start_iter(), bp.buf.get_end_iter(), False)
 
 # a stream that ends without a verdict marks what was running as failed
 bp._reset()
 win.set_busy(True)
 ev(event="job_start", name="documents")
-bp._finish(False, stopped=True)
+bp._ended()
 assert rows()["Documents"].state == "error" and bp.summary.get_label() == "Backup didn't finish"
 print("PROGRESS OK")
 '''

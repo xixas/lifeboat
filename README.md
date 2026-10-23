@@ -70,7 +70,7 @@ Each [release](https://github.com/xixas/lifeboat/releases) has a source tarball,
 provenance attestation (proof that GitHub Actions built the tarball from that tag). To install a release instead of `main`:
 
 ```sh
-gh release download -R xixas/lifeboat    # latest release; only the uploaded files, not GitHub's auto tarball
+gh release download -R xixas/lifeboat -p 'lifeboat-*.tar.gz' -p SHA256SUMS    # latest release, uploaded files only
 sha256sum -c SHA256SUMS                                          # the download is intact
 gh attestation verify lifeboat-*.tar.gz --repo xixas/lifeboat    # optional: it was built from this repo
 tar xzf lifeboat-*.tar.gz && cd lifeboat-*/ && ./install.sh

@@ -48,13 +48,13 @@ class Step:
         if state == "running":
             self.slot.append(spinner())
         elif state != "waiting":
-            name, css = {"ok": (ICONS["ok"], CSS["ok"]), "skip": ("list-remove-symbolic", CSS["warn"]),
+            name, css = {"ok": (ICONS["ok"], CSS["ok"]), "skip": ("list-remove-symbolic", "dim-label"),
                          "error": (ICONS["error"], CSS["error"])}[state]
             self.slot.append(Gtk.Image(icon_name=name, css_classes=[css]))
 
 
 class BackupProgress:
-    def __init__(self, win, argv, env, jobs=()):
+    def __init__(self, win, argv, env, jobs=(), finishing=True):
         self.win, self.argv, self.env = win, argv, env
         self.steps: dict[str, Step] = {}
         self.finishing = Step(FINISHING)
@@ -74,7 +74,7 @@ class BackupProgress:
         tv = Adw.ToolbarView(content=self.stack)
         tv.add_top_bar(hb)
         self.dlg = Adw.Dialog(title="Back up now", child=tv, content_width=720, content_height=520, can_close=False)
-        self._names = list(jobs)
+        self._names, self._finishing = list(jobs), finishing
         self._reset()
 
     # -- layout
@@ -121,7 +121,8 @@ class BackupProgress:
         self.finishing = Step(FINISHING)
         for n in self._names:
             self._step(n)
-        self.list.append(self.finishing.row)
+        if self._finishing:  # only configs with a manifest or passphrase check have this step
+            self.list.append(self.finishing.row)
         self.head.set_visible(False)
         self.retry.set_visible(False)
         self.finished, self.verdict = False, None
@@ -138,9 +139,12 @@ class BackupProgress:
     def _update_title(self):
         if self.finished:
             return
-        total = len(self.steps)
-        done = sum(s.state in ("ok", "skip", "error") for s in self.steps.values())
-        self.wt.set_subtitle(f"{done} of {total}" if total else "Running…")
+        rows = self._rows()
+        done = sum(s.state in ("ok", "skip", "error") for s in rows)
+        self.wt.set_subtitle(f"{done} of {len(rows)} done" if rows else "Running…")
+
+    def _rows(self):
+        return [*self.steps.values(), *([self.finishing] if self.finishing.row.get_parent() else [])]
 
     def on_event(self, line):
         try:
@@ -157,6 +161,8 @@ class BackupProgress:
         elif kind == "job_end":
             self._job_end(self._step(e["name"]), e)
         elif kind == "finishing_start":
+            if self.finishing.row.get_parent() is None:
+                self.list.append(self.finishing.row)
             self.finishing.set("running", "Backing up…")
         elif kind == "finishing_end":
             if e.get("ok"):
@@ -208,22 +214,23 @@ class BackupProgress:
         if self.finished:
             return
         self.finished = True
-        for s in [*self.steps.values(), self.finishing]:
-            if s.state not in ("waiting", "running"):
-                continue
-            if not ok:
+        for s in self._rows():
+            if s.state == "waiting" and s is self.finishing:
+                self.list.remove(s.row)  # it never began: there was nothing to finish up
+            elif s.state in ("waiting", "running") and not ok:
                 self._fail(s, "Stopped before this finished.", "Did not finish")
-            elif s is self.finishing:
-                self.list.remove(s.row)  # nothing to finish up (no manifest or passphrase check configured)
         failed = sum(s.state == "error" for s in self.steps.values())
         if ok:
             files = sum(s.files for s in self.steps.values())
             self.summary.set_label("Backed up")
             self.summary_sub.set_label(f"{files} file{'s' if files != 1 else ''} copied")
         else:
-            if stopped or not failed:
+            if stopped:
                 self.summary.set_label("Backup didn't finish")
                 self.summary_sub.set_label("See the Log for details")
+            elif not failed:
+                self.summary.set_label("Some steps didn't finish")
+                self.summary_sub.set_label("Your folders were copied. See the Log for details")
             else:
                 self.summary.set_label(f"{failed} folder{'s' if failed != 1 else ''} not backed up")
                 self.summary_sub.set_label("The others are safe on Google Drive")
@@ -241,8 +248,8 @@ class BackupProgress:
 
     def show_log(self, step):
         self.log_btn.set_active(True)
-        if step.mark is not None:
-            self.view.scroll_to_mark(step.mark, 0, True, 0, 0)
+        if step.mark is not None:  # once the Log page has been laid out, or the view scrolls past short content
+            GLib.idle_add(lambda: self.view.scroll_to_mark(step.mark, 0, True, 0, 0) and False)
 
     def _copy(self, text):
         copy_text(self.win, text)
@@ -313,8 +320,10 @@ class BackupProgress:
         self._finish(self.verdict is True, stopped=self.verdict is None)
 
 
-def job_names():
+def plan():
+    """(job names, whether a manifest or passphrase check will be saved at the end) from the config on disk."""
     try:
-        return [j.name for j in load_config().jobs]
+        cfg = load_config()
     except ConfigError:
-        return []
+        return [], True
+    return [j.name for j in cfg.jobs], bool(cfg.manifest or cfg.probe)

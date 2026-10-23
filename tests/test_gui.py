@@ -997,7 +997,7 @@ assert [s.state for s in rows().values()] == ["waiting"] * 5
 shot("progress-0-waiting")
 
 ev(event="job_start", name="documents")
-assert bp.wt.get_subtitle() == "0 of 4"
+assert bp.wt.get_subtitle() == "0 of 5 done"
 bp.on_log("INFO : a.txt: Copied (new)")
 assert rows()["Documents"].state == "running" and not bp.dlg.get_can_close()
 shot("progress-1-running")
@@ -1017,6 +1017,7 @@ assert [r[n].state for n in ("Documents", "Photos", "SSH keys", "Empty", "Finish
 assert r["Documents"].row.get_subtitle() == "Copied 2 files"
 assert r["SSH keys"].row.get_subtitle() == "Already up to date"
 assert r["Empty"].row.get_subtitle() == "Nothing to back up yet"
+assert r["Empty"].slot.get_first_child().has_css_class("dim-label")  # neutral, not the yellow of a warning
 assert isinstance(r["Photos"].row, Adw.ExpanderRow) and r["Photos"].row.get_expanded()
 assert "Is the drive plugged in" in r["Photos"].row.get_subtitle()
 assert bp.list.get_row_at_index(1) is r["Photos"].row  # swapped in place, order kept
@@ -1038,12 +1039,6 @@ for reason, want in (("missing", "doesn't exist any more"), ("dest_unreadable", 
     assert want in st.row.get_subtitle(), (reason, st.row.get_subtitle())
     bp.list.remove(st.row)
 
-# lines that are not events never raise (the dialog cannot be closed while it runs)
-for bad in ("{not json", "5", "[1]", json.dumps({"event": "job_start"}), json.dumps({"event": "job_end", "rc": 1}),
-            json.dumps({"event": "nonsense"})):
-    bp.on_event(bad)
-assert rows()["Photos"].state == "error"
-
 # the Log toggle swaps pages, "Show in Log" lands on the failed job's lines
 assert bp.stack.get_visible_child_name() == "progress"
 click(bp.dlg.get_child(), "Show in Log")
@@ -1051,6 +1046,12 @@ assert bp.stack.get_visible_child_name() == "log" and bp.log_btn.get_active() an
 assert "Copied (new)" in bp.buf.get_text(bp.buf.get_start_iter(), bp.buf.get_end_iter(), False)
 pump(timeout=1.5)  # let the toggle buttons finish their CSS transition before the snapshot
 shot("progress-3-log")
+# lines that are not events never raise (the dialog cannot be closed while it runs)
+for bad in ("{not json", "5", "[1]", json.dumps({"event": "job_start"}), json.dumps({"event": "job_end", "rc": 1}),
+            json.dumps({"event": "nonsense"})):
+    bp.on_event(bad)
+assert rows()["Photos"].state == "error"
+
 bp.progress_btn.set_active(True)
 assert bp.stack.get_visible_child_name() == "progress" and not bp.log_btn.get_active()
 bp.log_btn.set_active(True)
@@ -1074,6 +1075,8 @@ ev(event="done", ok=True)
 bp._ended()
 assert bp.wt.get_subtitle() == "Finished" and bp.summary.get_label() == "Backed up" and bp.summary_sub.get_label() == "4 files copied"
 assert not bp.retry.get_visible() and bp.list.get_row_at_index(4) is None  # no finishing row when nothing finished up
+assert bp.progress_btn.get_active() and not bp.log_btn.get_active() and bp.stack.get_visible_child_name() == "progress"
+pump(timeout=1.5)  # let the toggle finish its CSS transition before the snapshot
 shot("progress-4-done")
 
 # Try Again via its button: spawns again, and a callback of the old run cannot touch the new one
@@ -1096,6 +1099,17 @@ bp._ended(old_gen)  # the previous run's late eof
 assert not bp.finished and win.busy
 assert pump(lambda: bp.finished), "the new run never finished"
 assert bp.summary.get_label() == "Backed up" and "hello" in bp.buf.get_text(bp.buf.get_start_iter(), bp.buf.get_end_iter(), False)
+
+# no manifest or passphrase check configured: no "Finishing up" row, and a failed run is still described truthfully
+bp2 = progress.BackupProgress(win, ["true"], {}, ["documents"], finishing=False)
+assert bp2.list.get_row_at_index(1) is None and bp2.wt.get_subtitle() == "0 of 1 done"
+win.set_busy(True)
+bp2.on_event(json.dumps({"event": "job_start", "name": "documents"}))
+bp2.on_event(json.dumps({"event": "job_end", "name": "documents", "rc": 0, "files": 1}))
+bp2.on_event(json.dumps({"event": "done", "ok": False}))  # e.g. the settings command failed
+bp2._ended()
+assert bp2.summary.get_label() == "Some steps didn't finish" and bp2.retry.get_visible()
+assert bp2.list.get_row_at_index(1) is None
 
 # a stream that ends without a verdict marks what was running as failed
 bp._reset()

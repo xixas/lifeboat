@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.2](https://github.com/xixas/lifeboat/compare/v0.3.1...v0.3.2) (2026-10-23)
+
+
+### Bug Fixes
+
+* run, restore and prune dialogs work on libadwaita 1.5 (Ubuntu 24.04) ([5e97e2b](https://github.com/xixas/lifeboat/commit/5e97e2b6bd3ead80c7046e767df4212c2b0f4193))
+
 ## [0.3.1](https://github.com/xixas/lifeboat/compare/v0.3.0...v0.3.1) (2026-10-23)
 
 

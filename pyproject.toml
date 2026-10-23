@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "lifeboat"
-version = "0.3.1"
+version = "0.3.2"
 description = "Back up a Linux laptop to Google Drive (or any rclone remote) and see whether it is safe to lose"
 readme = "README.md"
 license = { text = "MIT" }

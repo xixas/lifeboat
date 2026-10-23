@@ -5,7 +5,54 @@
       "release-type": "python",
       "package-name": "lifeboat",
       "include-component-in-tag": false,
-      "changelog-path": "CHANGELOG.md"
+      "changelog-path": "CHANGELOG.md",
+      "changelog-sections": [
+        {
+          "type": "feat",
+          "section": "Features"
+        },
+        {
+          "type": "fix",
+          "section": "Bug Fixes"
+        },
+        {
+          "type": "perf",
+          "section": "Performance"
+        },
+        {
+          "type": "revert",
+          "section": "Reverts"
+        },
+        {
+          "type": "deps",
+          "section": "Dependencies"
+        },
+        {
+          "type": "docs",
+          "section": "Documentation",
+          "hidden": true
+        },
+        {
+          "type": "ci",
+          "section": "CI",
+          "hidden": true
+        },
+        {
+          "type": "test",
+          "section": "Tests",
+          "hidden": true
+        },
+        {
+          "type": "chore",
+          "section": "Chores",
+          "hidden": true
+        },
+        {
+          "type": "refactor",
+          "section": "Refactoring",
+          "hidden": true
+        }
+      ]
     }
   }
 }

@@ -265,15 +265,17 @@ def list_versions(cfg: Config, job: Job | str) -> list[str]:
 
 
 def restore(cfg: Config, job: Job | str, to_dir: str | os.PathLike, version: str | None = None,
-            files: list[str] | None = None, dry_run: bool = False, emit: Emit | None = None) -> int:
+            files: list[str] | None = None, dry_run: bool = False, emit: Emit | None = None,
+            keep_newer: bool = False) -> int:
     """Copy a job's current backup (version None) or one old version into to_dir with `rclone copy`: it adds
     and overwrites inside to_dir, deletes nothing, and never touches the job's live source unless the caller
-    passes that very directory as to_dir."""
+    passes that very directory as to_dir. keep_newer adds rclone's --update: a file that is newer
+    in to_dir is left alone."""
     job = cfg.job(job) if isinstance(job, str) else job
     if version is not None and not STAMP_RE.match(version):
         raise ConfigError(f"version must look like 2026-01-31_130000, got {version!r}")
     src = job.dest if version is None else f"{job.old.rstrip('/')}/{version}/{job.name}"
-    args = ["copy", src, os.path.expanduser(str(to_dir))] + COMMON + (["--dry-run"] if dry_run else [])
+    args = ["copy", src, os.path.expanduser(str(to_dir))] + COMMON + (["--dry-run"] if dry_run else []) + (["--update"] if keep_newer else [])
     tmp = None
     if files:
         tmp = tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False)

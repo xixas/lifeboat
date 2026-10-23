@@ -1,0 +1,3 @@
+Paste the following into your remote machine --->
+{"access_token":"REDACTED","token_type":"Bearer","refresh_token":"REDACTED","expiry":"2026-10-23T11:56:19.53013796+05:30","expires_in":3599}
+<---End paste

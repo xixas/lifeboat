@@ -1,0 +1,5 @@
+2026/10/23 10:56:12 NOTICE: Make sure your Redirect URL is set to "http://127.0.0.1:53682/" in your custom config.
+2026/10/23 10:56:12 NOTICE: If your browser doesn't open automatically go to the following link: http://127.0.0.1:53682/auth?state=STATE
+2026/10/23 10:56:12 NOTICE: Log in and authorize rclone for access
+2026/10/23 10:56:12 NOTICE: Waiting for code...
+2026/10/23 10:56:20 NOTICE: Got code

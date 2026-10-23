@@ -1,4 +1,6 @@
 import json
+import sys
+import types
 
 import pytest
 
@@ -68,8 +70,10 @@ def test_versions_json(env, make_cfg, capsys):
 
 
 def test_check_json_never_notifies(env, make_cfg, capsys, monkeypatch):
-    import lifeboat.app.notify as notify
-    monkeypatch.setattr(notify, "send", lambda probs: pytest.fail("notified"))
+    # A stand-in module: CI has no PyGObject, and importing the real one would need it.
+    fake = types.ModuleType("lifeboat.app.notify")
+    fake.send = lambda probs: pytest.fail("notified")
+    monkeypatch.setitem(sys.modules, "lifeboat.app.notify", fake)
     write_cfg(env, make_cfg)
     assert cli.main(["check", "--json"]) == 1
     probs = json.loads(capsys.readouterr().out)["problems"]

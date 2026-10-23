@@ -14,6 +14,16 @@ CSS = {"ok": "success", "warn": "warning", "error": "error"}
 WORDS = {"ok": "OK", "warn": "Needs attention", "error": "Failed"}
 
 
+def spinner_class(adw=Adw):
+    """Adw.Spinner needs libadwaita 1.6; Ubuntu 24.04 has 1.5, where Gtk.Spinner (started) does the job."""
+    return getattr(adw, "Spinner", None) or Gtk.Spinner
+
+
+def spinner() -> Gtk.Widget:
+    cls = spinner_class()
+    return Gtk.Spinner(spinning=True) if cls is Gtk.Spinner else cls()
+
+
 def ago(iso) -> str:
     dt = parse_time(iso)
     if dt is None:

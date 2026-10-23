@@ -11,7 +11,7 @@ wizard: you edit a TOML file.
 
 ## Install
 
-Needs Python 3.11+, rclone 1.60+, PyGObject, GTK 4 and libadwaita.
+Needs Python 3.11+, rclone 1.60+, PyGObject, GTK 4 and libadwaita 1.5+.
 
 | Distro | Install the dependencies |
 |---|---|

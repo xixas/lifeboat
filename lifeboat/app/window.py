@@ -12,7 +12,7 @@ from gi.repository import Adw, Gio, GLib, Gtk  # noqa: E402
 from lifeboat import APP_ID, engine  # noqa: E402
 from lifeboat.app.pages import PAGE_ICONS, PAGE_NAMES, PagesMixin  # noqa: E402
 from lifeboat.app.reader import read_lines  # noqa: E402
-from lifeboat.app.widgets import CSS, ICONS  # noqa: E402
+from lifeboat.app.widgets import CSS, ICONS, spinner  # noqa: E402
 from lifeboat.config import ConfigError, config_path, load_config  # noqa: E402
 
 DOT_PAGES = ("overview", "backups", "settings", "skills")
@@ -208,7 +208,7 @@ class Win(PagesMixin, Adw.ApplicationWindow):
             return
         self.set_busy(True)
         wt = Adw.WindowTitle(title=title, subtitle="Running…")
-        spin = Adw.Spinner()
+        spin = spinner()
         hb = Adw.HeaderBar(title_widget=wt)
         hb.pack_start(spin)
         buf = Gtk.TextBuffer()

@@ -144,11 +144,12 @@ class BackupProgress:
 
     def on_event(self, line):
         try:
-            e = json.loads(line)
-            kind = e["event"]
-        except (ValueError, KeyError, TypeError):
+            self._event(json.loads(line))
+        except (ValueError, KeyError, TypeError, AttributeError):
             self.on_log(line)
-            return
+
+    def _event(self, e):
+        kind = e["event"]
         if kind == "job_start":
             step = self._step(e["name"])
             step.mark = self.buf.create_mark(None, self.buf.get_end_iter(), True)

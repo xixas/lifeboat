@@ -1038,6 +1038,12 @@ for reason, want in (("missing", "doesn't exist any more"), ("dest_unreadable", 
     assert want in st.row.get_subtitle(), (reason, st.row.get_subtitle())
     bp.list.remove(st.row)
 
+# lines that are not events never raise (the dialog cannot be closed while it runs)
+for bad in ("{not json", "5", "[1]", json.dumps({"event": "job_start"}), json.dumps({"event": "job_end", "rc": 1}),
+            json.dumps({"event": "nonsense"})):
+    bp.on_event(bad)
+assert rows()["Photos"].state == "error"
+
 # the Log toggle swaps pages, "Show in Log" lands on the failed job's lines
 assert bp.stack.get_visible_child_name() == "progress"
 click(bp.dlg.get_child(), "Show in Log")

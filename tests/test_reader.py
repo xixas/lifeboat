@@ -21,3 +21,20 @@ def test_reader_handles_blank_lines_partial_last_line_and_exit_code():
     loop.run()
     assert lines == ["a", "", "b", "c", "", "last"]
     assert out["rc"] == 3
+
+
+def test_reader_keeps_reading_when_the_line_callback_raises(capsys):
+    proc = Gio.Subprocess.new(["sh", "-c", "echo a; echo SECRET; echo c"], Gio.SubprocessFlags.STDOUT_PIPE)
+    loop, lines, eof = GLib.MainLoop(), [], []
+
+    def on_line(line):
+        if line == "SECRET":
+            raise ValueError("SECRET")
+        lines.append(line)
+
+    read_lines(proc.get_stdout_pipe(), on_line, lambda: (eof.append(1), loop.quit()))
+    GLib.timeout_add_seconds(10, loop.quit)
+    loop.run()
+    assert lines == ["a", "c"] and eof
+    err = capsys.readouterr().err
+    assert "ValueError" in err and "SECRET" not in err

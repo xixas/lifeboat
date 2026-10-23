@@ -9,8 +9,9 @@ gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
 from gi.repository import Adw, Gio, GLib, Gtk  # noqa: E402
 
+from lifeboat import engine  # noqa: E402
 from lifeboat.app.reader import read_lines  # noqa: E402
-from lifeboat.app.widgets import CSS, ICONS, copy_text, spinner  # noqa: E402
+from lifeboat.app.widgets import CSS, ICONS, copy_text, fmt_time, spinner  # noqa: E402
 from lifeboat.app.wizard_state import job_label  # noqa: E402
 from lifeboat.config import ConfigError, load_config  # noqa: E402
 
@@ -54,11 +55,15 @@ class Step:
 
 
 class BackupProgress:
-    def __init__(self, win, argv, env, jobs=(), finishing=True):
+    def __init__(self, win, argv, env, jobs=(), first=False, daily_at="", kit=False):
+        """`first` is the run that ends setup: it reads as "you're all set" and says when the daily backup happens.
+        `kit` adds the reminder to keep the recovery kit (some folder is encrypted)."""
         self.win, self.argv, self.env = win, argv, env
+        self.first, self.daily_at, self.kit = first, daily_at, kit
+        title = "First Backup" if first else "Back Up Now"
         self.steps: dict[str, Step] = {}
         self.finishing = Step(FINISHING)
-        self.wt = Adw.WindowTitle(title="Back up now", subtitle="")
+        self.wt = Adw.WindowTitle(title=title, subtitle="")
         self.progress_btn = Gtk.ToggleButton(label="Progress", active=True)
         self.log_btn = Gtk.ToggleButton(label="Log", group=self.progress_btn)
         switch = Gtk.Box(css_classes=["linked"])
@@ -73,8 +78,8 @@ class BackupProgress:
             b.connect("toggled", lambda b, name=name: b.get_active() and self.stack.set_visible_child_name(name))
         tv = Adw.ToolbarView(content=self.stack)
         tv.add_top_bar(hb)
-        self.dlg = Adw.Dialog(title="Back up now", child=tv, content_width=720, content_height=520, can_close=False)
-        self._names, self._finishing = list(jobs), finishing
+        self.dlg = Adw.Dialog(title=title, child=tv, content_width=720, content_height=520, can_close=False)
+        self._names = list(jobs)
         self._reset()
 
     # -- layout
@@ -85,16 +90,24 @@ class BackupProgress:
         self.head.append(self.summary)
         self.head.append(self.summary_sub)
         self.list = Gtk.ListBox(selection_mode=Gtk.SelectionMode.NONE, css_classes=["boxed-list"])
-        self.retry = Gtk.Button(label="Try Again", css_classes=["pill", "suggested-action"], halign=Gtk.Align.CENTER, visible=False)
+        self.kit_note = Gtk.Label(label="Keep your recovery kit somewhere other than this laptop.", css_classes=["dim-label", "caption"],
+                                  wrap=True, justify=Gtk.Justification.CENTER, visible=False)
+        self.head.append(self.kit_note)
+        self.done_btn = Gtk.Button(label="Done", css_classes=["pill", "suggested-action"], visible=False)
+        self.done_btn.connect("clicked", lambda *_: self.dlg.close())
+        self.retry = Gtk.Button(label="Try Again", css_classes=["pill", "suggested-action"], visible=False)
         self.retry.connect("clicked", lambda *_: self.start())
+        self.close_btn = Gtk.Button(label="Close", css_classes=["pill"], visible=False)
+        self.close_btn.connect("clicked", lambda *_: self.dlg.close())
+        actions = Gtk.Box(spacing=12, halign=Gtk.Align.CENTER, margin_top=6, margin_bottom=18)  # outside the scroll: always in view
+        for b in (self.done_btn, self.retry, self.close_btn):
+            actions.append(b)
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=18, margin_top=18, margin_bottom=18, margin_start=18, margin_end=18)
         box.append(self.head)
         box.append(self.list)
-        page = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)  # the button sits outside the scroll so it is always in view
+        page = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
         page.append(Gtk.ScrolledWindow(child=Adw.Clamp(child=box), vexpand=True))
-        self.retry.set_margin_top(6)
-        self.retry.set_margin_bottom(18)
-        page.append(self.retry)
+        page.append(actions)
         return page
 
     def _log_page(self):
@@ -121,10 +134,9 @@ class BackupProgress:
         self.finishing = Step(FINISHING)
         for n in self._names:
             self._step(n)
-        if self._finishing:  # only configs with a manifest or passphrase check have this step
-            self.list.append(self.finishing.row)
         self.head.set_visible(False)
-        self.retry.set_visible(False)
+        for b in (self.done_btn, self.retry, self.close_btn):
+            b.set_visible(False)
         self.finished, self.verdict = False, None
         self.gen = getattr(self, "gen", 0) + 1  # callbacks of the run before this one ignore themselves
         self.progress_btn.set_active(True)
@@ -161,12 +173,10 @@ class BackupProgress:
         elif kind == "job_end":
             self._job_end(self._step(e["name"]), e)
         elif kind == "finishing_start":
-            if self.finishing.row.get_parent() is None:
-                self.list.append(self.finishing.row)
             self.finishing.set("running", "Backing up…")
         elif kind == "finishing_end":
             if e.get("ok"):
-                self.finishing.set("ok", "Manifest saved")
+                self.finishing.set("ok", "Manifest saved")  # not in the list: housekeeping only shows when it fails
             else:
                 self._fail(self.finishing, "Could not save the backup's manifest or passphrase check.", "Could not finish")
         elif kind == "done":
@@ -204,9 +214,12 @@ class BackupProgress:
         inner.append(bar)
         row.add_row(inner)
         row.set_expanded(True)
-        index = old.get_index()
-        self.list.remove(old)
-        self.list.insert(row, index)
+        if old.get_parent() is None:
+            self.list.append(row)
+        else:
+            index = old.get_index()
+            self.list.remove(old)
+            self.list.insert(row, index)
         step.row = row
 
     def _finish(self, ok, stopped=False):
@@ -217,15 +230,18 @@ class BackupProgress:
         self.dlg.set_can_close(True)  # first, so nothing below can leave the dialog stuck open
         self.win.set_busy(False)
         for s in self._rows():
-            if s.state == "waiting" and s is self.finishing:
-                self.list.remove(s.row)  # it never began: there was nothing to finish up
-            elif s.state in ("waiting", "running") and not ok:
+            if s.state in ("waiting", "running") and not ok:
                 self._fail(s, "Stopped before this finished.", "Did not finish")
         failed = sum(s.state == "error" for s in self.steps.values())
         if ok:
             files = sum(s.files for s in self.steps.values())
-            self.summary.set_label("Backed up")
-            self.summary_sub.set_label(f"{files} file{'s' if files != 1 else ''} copied")
+            self.copied = f"{files} file{'s' if files != 1 else ''} copied"
+            self.safe = f"{files} file{'s are' if files != 1 else ' is'} safe on Google Drive."
+            self.summary.set_label("You're All Set" if self.first else "Backed Up")
+            self.summary_sub.set_label(self.safe if self.first else self.copied)
+            self.kit_note.set_visible(self.first and self.kit)
+            gen = self.gen
+            self.win.in_thread(engine.timers, lambda t: gen == self.gen and self._next_backup(t["lifeboat"]), lambda _e: None)
         else:
             if stopped:
                 self.summary.set_label("Backup didn't finish")
@@ -237,9 +253,23 @@ class BackupProgress:
                 self.summary.set_label(f"{failed} folder{'s' if failed != 1 else ''} not backed up")
                 self.summary_sub.set_label("The others are safe on Google Drive")
         self.head.set_visible(True)
+        self.done_btn.set_visible(ok)
         self.retry.set_visible(not ok)
+        self.close_btn.set_visible(not ok)
         self.wt.set_subtitle("Finished" if ok else "Finished with problems")
         self.win.refresh()
+
+    def _next_backup(self, timer):
+        """The summary's last line, from the daily timer's own next time: never worked out here."""
+        if not timer["installed"]:
+            when = "No daily backup scheduled (see Preferences)"
+        elif self.first and self.daily_at:
+            when = f"Lifeboat backs up every day at {self.daily_at} by itself. You don't need to keep it open."
+        elif timer["next"]:
+            when = f"Next backup {fmt_time(timer['next'])}"
+        else:
+            return
+        self.summary_sub.set_label(f"{self.safe}\n{when}" if self.first else f"{self.copied} · {when}")
 
     # -- log
     def on_log(self, line):
@@ -321,9 +351,9 @@ class BackupProgress:
 
 
 def plan():
-    """(job names, whether a manifest or passphrase check will be saved at the end) from the config on disk."""
+    """What the dialog needs from the config on disk: job names, daily time, and whether any folder is encrypted."""
     try:
         cfg = load_config()
     except ConfigError:
-        return [], True
-    return [j.name for j in cfg.jobs], bool(cfg.manifest or cfg.probe)
+        return {"jobs": [], "daily_at": "", "kit": False}
+    return {"jobs": [j.name for j in cfg.jobs], "daily_at": cfg.daily_at, "kit": any(j.encrypted for j in cfg.jobs)}

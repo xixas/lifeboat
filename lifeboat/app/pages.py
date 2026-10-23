@@ -110,7 +110,7 @@ class PagesMixin:
             jr.append(r)
         pg.add(group("Jobs", rows=jr))
         pg.add(group(rows=[self._box([self.button("Back up now", self.run_backup, ("pill", "suggested-action")),
-                                      self.button("Dry run", lambda: self.run_cli("Dry run", "run", "--dry-run"))])]))
+                                      self.button("Dry run", lambda: self.run_cli("Dry Run", "run", "--dry-run"))])]))
         pr, ptm = S["prune"], S["timers"]["lifeboat-prune"]
         pg.add(group("Safety net", rows=[
             row(f"Old versions kept {S['keep_days']} days",

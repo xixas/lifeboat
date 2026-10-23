@@ -223,7 +223,8 @@ setup.check_passphrase = lambda conf, pw, device: calls.append(("check", pw, dev
 
 win = Win(None)
 win.run_cli = lambda *a: calls.append(("run_cli",) + a)
-win.run_backup = lambda: calls.append(("run_backup",))
+ran_first = []
+win.run_backup = lambda **kw: (calls.append(("run_backup",)), ran_first.append(kw.get("first")))
 win.refresh = lambda: calls.append(("refresh",))
 win.open_restore_wizard = lambda device=None, handover=None: calls.append(("restore", device))
 win.present()
@@ -297,6 +298,7 @@ assert wiz.kit_go.get_sensitive()
 wiz.kit_go.emit("clicked")
 assert not wiz.get_can_close()
 assert pump(lambda: ("run_backup",) in calls), calls
+assert ran_first == [True], ran_first  # the wizard's backup is the "First Backup" one
 assert ("make_remotes", TOKEN, pw) in calls
 cfgc = [c for c in calls if c[0] == "config"][0]
 assert cfgc[1] == "my-laptop" and cfgc[3] == "09:00" and cfgc[4] == []
@@ -997,13 +999,17 @@ assert [s.state for s in rows().values()] == ["waiting"] * 5
 shot("progress-0-waiting")
 
 ev(event="job_start", name="documents")
-assert bp.wt.get_subtitle() == "0 of 5 done"
-bp.on_log("INFO : a.txt: Copied (new)")
+assert bp.wt.get_subtitle() == "0 of 4 done"
+for ln in ("Lifeboat 0.4.0 · backup of geass-rog · Thu 23 Oct 2026 19:20:52",
+           "19:20:52  Documents  ~/Documents → Google Drive: Lifeboat/geass-rog/Documents",
+           "19:20:54  Documents  copied hello.txt (new, 46 B)", "19:20:57  Documents  done 1 file, 46 B, 5 s",
+           "19:20:57  Photos  ~/Photos → Google Drive: Lifeboat/geass-rog/Photos"):
+    bp.on_log(ln)
 assert rows()["Documents"].state == "running" and not bp.dlg.get_can_close()
 shot("progress-1-running")
 ev(event="job_end", name="documents", rc=0, skipped=False, files=2, error="")
 ev(event="job_start", name="photos")
-bp.on_log("photos: refusing to sync: source /x is missing or empty - nothing was changed")
+bp.on_log("19:20:58  Photos  ERROR refusing to sync: source /run/media/v/Photos is missing or empty (unmounted drive or typo?) — nothing was changed")
 ev(event="job_end", name="photos", rc=2, skipped=False, files=0, reason="empty_with_backup",
    error="photos: refusing to sync: source /x is missing or empty - nothing was changed")
 ev(event="job_start", name="ssh-keys")
@@ -1026,7 +1032,8 @@ assert not bp.finished and not bp.retry.get_visible()  # the child may still be 
 bp._ended()
 assert bp.summary.get_label() == "1 folder not backed up", bp.summary.get_label()
 assert bp.summary_sub.get_label() == "The others are safe on Google Drive"
-assert bp.retry.get_visible() and bp.dlg.get_can_close()
+assert bp.retry.get_visible() and bp.close_btn.get_visible() and not bp.done_btn.get_visible() and bp.dlg.get_can_close()
+assert bp.finishing.row.get_parent() is None  # housekeeping shows only when it fails
 assert bp.wt.get_subtitle() == "Finished with problems"
 assert "Try Again" in [b.get_label() for b in buttons(bp.dlg.get_child())] and bp.retry.is_ancestor(bp.dlg) and bp.retry.get_visible()
 shot("progress-2-failed")
@@ -1043,7 +1050,7 @@ for reason, want in (("missing", "doesn't exist any more"), ("dest_unreadable", 
 assert bp.stack.get_visible_child_name() == "progress"
 click(bp.dlg.get_child(), "Show in Log")
 assert bp.stack.get_visible_child_name() == "log" and bp.log_btn.get_active() and not bp.progress_btn.get_active()
-assert "Copied (new)" in bp.buf.get_text(bp.buf.get_start_iter(), bp.buf.get_end_iter(), False)
+assert "copied hello.txt (new, 46 B)" in bp.buf.get_text(bp.buf.get_start_iter(), bp.buf.get_end_iter(), False)
 pump(timeout=1.5)  # let the toggle buttons finish their CSS transition before the snapshot
 shot("progress-3-log")
 # lines that are not events never raise (the dialog cannot be closed while it runs)
@@ -1060,7 +1067,7 @@ click(bp.dlg.get_child(), "Copy Error")
 assert ("toast", "Copied") in calls
 saved = HOME / "kit.pdf"
 click(bp.dlg.get_child(), "Save Log…")
-assert "Copied (new)" in saved.read_text() and ("toast", "Log saved") in calls
+assert "copied hello.txt (new, 46 B)" in saved.read_text() and ("toast", "Log saved") in calls
 
 # Try Again resets the same dialog
 bp._reset()  # Try Again, with the Log showing, goes back to Progress
@@ -1068,16 +1075,62 @@ assert bp.stack.get_visible_child_name() == "progress" and bp.progress_btn.get_a
 assert [s.state for s in rows().values()] == ["waiting"] * 5 and not bp.retry.get_visible() and not bp.head.get_visible()
 
 # a clean run
+TIMER = {"lifeboat": {"installed": True, "next": "2026-10-24T13:00:00+05:30", "last": None}}
+progress.engine.timers = lambda: TIMER
 ev(event="job_start", name="documents")
 for n in ("documents", "photos", "ssh-keys", "empty"):
     ev(event="job_end", name=n, rc=0, skipped=False, files=1, error="")
 ev(event="done", ok=True)
 bp._ended()
-assert bp.wt.get_subtitle() == "Finished" and bp.summary.get_label() == "Backed up" and bp.summary_sub.get_label() == "4 files copied"
-assert not bp.retry.get_visible() and bp.list.get_row_at_index(4) is None  # no finishing row when nothing finished up
+assert bp.wt.get_subtitle() == "Finished" and bp.summary.get_label() == "Backed Up" and bp.summary_sub.get_label() == "4 files copied"
+assert pump(lambda: "Next backup Sat 24 Oct, 13:00" in bp.summary_sub.get_label()), bp.summary_sub.get_label()  # the timer's own time
+assert bp.summary_sub.get_label().startswith("4 files copied · ")
+assert bp.done_btn.get_visible() and not bp.retry.get_visible() and not bp.close_btn.get_visible()
+assert bp.list.get_row_at_index(4) is None and bp.finishing.row.get_parent() is None  # no finishing row on success
 assert bp.progress_btn.get_active() and not bp.log_btn.get_active() and bp.stack.get_visible_child_name() == "progress"
 pump(timeout=1.5)  # let the toggle finish its CSS transition before the snapshot
 shot("progress-4-done")
+
+# no timer installed: say so, never invent a time
+TIMER["lifeboat"].update(installed=False, next=None)
+bp._reset()
+ev(event="job_start", name="documents")
+for n in ("documents", "photos", "ssh-keys", "empty"):
+    ev(event="job_end", name=n, rc=0, skipped=False, files=0, error="")
+ev(event="done", ok=True)
+bp._ended()
+assert pump(lambda: "No daily backup scheduled" in bp.summary_sub.get_label()), bp.summary_sub.get_label()
+
+# Done closes the dialog
+closed = []
+bp.dlg.connect("closed", lambda *_: closed.append(1))
+click(bp.dlg.get_child(), "Done")
+assert pump(lambda: closed)
+
+# Finishing up appears only when it fails
+bp._reset()
+ev(event="finishing_start")
+ev(event="finishing_end", ok=False)
+assert bp.finishing.state == "error" and bp.finishing.row.get_parent() is not None
+
+# the wizard's run: "First Backup", "You're All Set", the daily time and the recovery kit reminder
+TIMER["lifeboat"].update(installed=True, next="2026-10-24T13:00:00+05:30")
+fb = progress.BackupProgress(win, ["true"], {}, ["documents", "ssh-keys"], first=True, daily_at="13:00", kit=True)
+assert fb.wt.get_title() == "First Backup" and fb.dlg.get_title() == "First Backup"
+win.set_busy(True)
+fb.on_event(json.dumps({"event": "job_start", "name": "documents"}))
+fb.on_event(json.dumps({"event": "job_end", "name": "documents", "rc": 0, "files": 2}))
+fb.on_event(json.dumps({"event": "job_start", "name": "ssh-keys"}))
+fb.on_event(json.dumps({"event": "job_end", "name": "ssh-keys", "rc": 0, "files": 1}))
+fb.on_event(json.dumps({"event": "done", "ok": True}))
+fb._ended()
+assert fb.summary.get_label() == "You're All Set" and fb.kit_note.get_visible()
+assert pump(lambda: "every day at 13:00 by itself. You don't need to keep it open." in fb.summary_sub.get_label()), fb.summary_sub.get_label()
+assert fb.summary_sub.get_label().startswith("3 files are safe on Google Drive.")
+wiz = fb.dlg
+fb.dlg.present(win)
+shot("progress-5-first-backup")
+wiz = bp.dlg
 
 # Try Again via its button: spawns again, and a callback of the old run cannot touch the new one
 spawned = []
@@ -1098,10 +1151,10 @@ assert spawned == [1] and bp.gen == old_gen + 1 and not bp.finished
 bp._ended(old_gen)  # the previous run's late eof
 assert not bp.finished and win.busy
 assert pump(lambda: bp.finished), "the new run never finished"
-assert bp.summary.get_label() == "Backed up" and "hello" in bp.buf.get_text(bp.buf.get_start_iter(), bp.buf.get_end_iter(), False)
+assert bp.summary.get_label() == "Backed Up" and "hello" in bp.buf.get_text(bp.buf.get_start_iter(), bp.buf.get_end_iter(), False)
 
 # no manifest or passphrase check configured: no "Finishing up" row, and a failed run is still described truthfully
-bp2 = progress.BackupProgress(win, ["true"], {}, ["documents"], finishing=False)
+bp2 = progress.BackupProgress(win, ["true"], {}, ["documents"])
 assert bp2.list.get_row_at_index(1) is None and bp2.wt.get_subtitle() == "0 of 1 done"
 win.set_busy(True)
 bp2.on_event(json.dumps({"event": "job_start", "name": "documents"}))

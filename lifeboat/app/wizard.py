@@ -335,7 +335,7 @@ class SetupWizard(AccountDialog):
             return
         self.force_close()
         self.win.refresh()
-        self.win.run_backup()
+        self.win.run_backup(first=True)
 
     def _setup_failed(self, err):
         self._error_page(self.setup_page, "Setup Failed", err, lambda: self.nav.pop())

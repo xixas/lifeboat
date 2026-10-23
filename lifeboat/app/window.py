@@ -201,11 +201,13 @@ class Win(PagesMixin, Adw.ApplicationWindow):
         argv, env = self.cli(*args)
         self.stream(title, argv, env)
 
-    def run_backup(self):
-        """The checklist dialog for "Back up now"; every other command uses run_cli's plain log."""
+    def run_backup(self, first=False):
+        """The checklist dialog for "Back up now"; every other command uses run_cli's plain log.
+        `first` is the backup that ends the setup wizard."""
         if not self.busy:
             argv, env = self.cli("run", "--events")
-            BackupProgress(self, argv, env, *plan()).start()
+            p = plan()
+            BackupProgress(self, argv, env, p["jobs"], first, p["daily_at"], p["kit"]).start()
 
     def set_busy(self, b):
         self.busy = b

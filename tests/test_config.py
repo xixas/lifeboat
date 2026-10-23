@@ -1,6 +1,6 @@
 import pytest
 
-from lifeboat import __version__
+from lifeboat import __version__, config
 from lifeboat.config import ConfigError, load_config, parse
 
 JOB = {"name": "a", "source": "~/a", "dest": "r:a", "old": "r:old"}
@@ -175,3 +175,16 @@ def test_device_table_parses_and_is_optional():
 def test_device_validation_names_the_bad_key(device, key):
     with pytest.raises(ConfigError, match=key.replace(".", r"\.")):
         parse({"jobs": [JOB], "device": device})
+
+
+def test_example_config_path_prefers_repo_layout():
+    path = config.example_config_path()
+    assert path.parent.name == "data" and path.is_file()
+
+
+def test_example_config_path_falls_back_to_system_install(tmp_path, monkeypatch):
+    system = tmp_path / "config.example.toml"
+    system.write_text("# example\n")
+    monkeypatch.setattr(config, "__file__", str(tmp_path / "site-packages" / "lifeboat" / "config.py"))
+    monkeypatch.setattr(config, "SYSTEM_EXAMPLE_CONFIG", system)
+    assert config.example_config_path() == system

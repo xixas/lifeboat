@@ -179,8 +179,13 @@ def load_config(path: Path | str | None = None) -> Config:
 
 
 # ---------------------------------------------------------------- editing config.toml as text
+SYSTEM_EXAMPLE_CONFIG = Path("/usr/share/lifeboat/config.example.toml")  # where the RPM puts it
+
+
 def example_config_path() -> Path:
-    return Path(__file__).resolve().parent.parent / "data" / "config.example.toml"
+    """The example config: next to the package (repo and install.sh layout), else the system-wide copy (RPM)."""
+    local = Path(__file__).resolve().parent.parent / "data" / "config.example.toml"
+    return local if local.is_file() else SYSTEM_EXAMPLE_CONFIG
 
 
 def default_old(dest: str) -> str:

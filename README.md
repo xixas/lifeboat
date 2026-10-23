@@ -56,14 +56,26 @@ backup (a list of files saved as one versioned bundle) is planned.
 | Command | Does |
 |---|---|
 | `lifeboat` | Open the app |
-| `lifeboat run [--dry-run]` | Settings command (if any), then every job |
-| `lifeboat prune` | Delete old versions past `keep_days` |
+| `lifeboat run [--dry-run] [--json]` | Settings command (if any), then every job |
+| `lifeboat prune [--json]` | Delete old versions past `keep_days` |
 | `lifeboat status [--json]` | Show the current state |
-| `lifeboat check [--dry-run]` | Notify about problems (dry run: just print) |
-| `lifeboat versions JOB` | List old versions of a job |
-| `lifeboat restore JOB --to DIR [--version STAMP] [--dry-run]` | Copy the current backup or an old version into `DIR` |
+| `lifeboat check [--dry-run] [--json]` | Notify about problems (dry run or `--json`: just print; `--json` exits 1 if any) |
+| `lifeboat versions JOB [--json]` | List old versions of a job |
+| `lifeboat restore JOB --to DIR [--version STAMP] [--dry-run] [--json]` | Copy the current backup or an old version into `DIR` |
+| `lifeboat jobs` / `remotes` / `config` `[--json]` | List jobs, list rclone remotes, check the config file |
+| `lifeboat init` | Write an example config if none exists |
+| `lifeboat add-job NAME SOURCE DEST [--exclude PAT]... [--existing-dest] [--dry-run] [--json]` | Add a backup job to the config |
+| `lifeboat remove-job NAME [--dry-run] [--json]` | Remove a job (remote data is kept) |
 | `lifeboat install-timer` / `uninstall-timer` | Daily backup + weekly prune as systemd user timers |
 | `lifeboat --version` | Print the version |
+
+Jobs are generic: any local folder can go to any rclone remote, not only Google Drive.
+
+## Use it with an AI assistant
+
+Every command has `--json` output and safe `--dry-run` previews, so an assistant such as Claude Code or Codex can add
+folders, run backups and check health for you. See [docs/agents.md](docs/agents.md) for the commands and safety rules,
+and install the skill by copying `skills/lifeboat` into `~/.claude/skills/`, or with `npx skills add xixas/lifeboat`.
 
 ## How it works
 

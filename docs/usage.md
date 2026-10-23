@@ -62,17 +62,44 @@ you point `--to` at one.
 | Command | Does |
 |---|---|
 | `lifeboat` | Open the app |
-| `lifeboat run [--dry-run]` | One backup pass |
-| `lifeboat prune` | Delete old versions past `keep_days` |
+| `lifeboat run [--dry-run] [--json]` | One backup pass |
+| `lifeboat prune [--json]` | Delete old versions past `keep_days` |
 | `lifeboat status [--json]` | Everything the app knows (`--dump` is an alias for `status --json`) |
-| `lifeboat check [--dry-run]` | Notify about problems (dry run: just print) |
-| `lifeboat versions JOB` | List old versions |
-| `lifeboat restore JOB --to DIR ...` | Restore |
+| `lifeboat check [--dry-run] [--json]` | Notify about problems (dry run or `--json`: just print; `--json` exits 1 if any) |
+| `lifeboat versions JOB [--json]` | List old versions |
+| `lifeboat restore JOB --to DIR [--version STAMP] [--dry-run] [--json]` | Restore |
+| `lifeboat jobs [--json]` | List the configured jobs |
+| `lifeboat remotes [--json]` | List rclone remotes and their types |
+| `lifeboat config [--json]` | Check the config file (exit 2 if missing or invalid) |
+| `lifeboat init` | Write an example config if none exists |
+| `lifeboat add-job NAME SOURCE DEST [--old OLD] [--exclude PAT]... [--include PAT]... [--filter-file F] [--encrypted] [--existing-dest] [--dry-run] [--json]` | Add a job to the config |
+| `lifeboat remove-job NAME [--dry-run] [--json]` | Remove a job from the config (remote data is kept) |
 | `lifeboat install-timer` / `uninstall-timer` | Manage the systemd timers |
+
+Exit codes: 0 ok, 1 the operation failed or something is not ok, 2 config or usage error. With `--json`, stdout is one
+JSON document and other output goes to stderr. `add-job` and `remove-job` edit `config.toml` as text (comments are kept),
+validate before writing, refuse a DEST that is not empty (a run mirrors SOURCE onto DEST) and keep the previous file as `config.toml.bak`. To let an AI assistant use these commands, see
+[agents.md](agents.md).
 
 Logs and last results: `~/.local/state/lifeboat/` (`last-run.json`, `prune.json`, `settings.json`, `run.log`).
 
 Debug: `LIFEBOAT_CYCLE=1` visits every page and quits; add `LIFEBOAT_SNAP=DIR` to save a PNG of each.
+
+## Tips and tricks
+
+- **What to back up on a Linux laptop:** `~/Documents`, `~/Projects` (source code), `~/Pictures`, `~/.ssh`, `~/.gnupg`, and
+  any app data you cannot recreate. Settings in `~` are easiest with a dotfiles tool via `[settings] command`.
+- **What to skip:** caches (`~/.cache`), `node_modules`, `.venv`, `__pycache__`, `target/` build folders, browser cache
+  directories, Steam libraries and Flatpak runtimes (`~/.local/share/Steam`, `~/.var/app/*/cache`): large and re-downloadable.
+  Example: `lifeboat add-job projects ~/Projects gdrive:Backup/Projects --exclude 'node_modules/**' --exclude '.venv/**'`.
+- **Secrets go through a crypt remote.** Put `~/.ssh`, `~/.gnupg` and tokens only in a job whose `dest` is on a crypt remote,
+  so Google (or whoever hosts the remote) only sees scrambled files.
+- **Keep the crypt passphrase off the laptop:** in a password manager and on paper. Without it the encrypted backup is unreadable.
+- **One job per folder.** A failure in one job (an unmounted drive, a bad pattern) then does not stop the others, and the status page shows which one failed.
+- **Test a restore monthly:** `lifeboat restore JOB --to "$(mktemp -d)" --dry-run` lists what would be copied back.
+- **See what the timer would warn about:** `lifeboat check --dry-run`.
+- **Complex rules:** use a filter file (`filter_file`, an rclone `--filter-from` file) instead of long `exclude` lists.
+- **Preview every change:** `add-job --dry-run`, `remove-job --dry-run`, `run --dry-run`.
 
 ## Troubleshooting
 

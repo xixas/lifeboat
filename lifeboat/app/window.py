@@ -11,6 +11,7 @@ from gi.repository import Adw, Gio, GLib, Gtk  # noqa: E402
 
 from lifeboat import APP_ID, engine  # noqa: E402
 from lifeboat.app.pages import PAGE_ICONS, PAGE_NAMES, PagesMixin  # noqa: E402
+from lifeboat.app.progress import BackupProgress, plan  # noqa: E402
 from lifeboat.app.reader import read_lines  # noqa: E402
 from lifeboat.app.restore import RestoreWizard  # noqa: E402
 from lifeboat.app.widgets import CSS, ICONS, copy_text, spinner  # noqa: E402
@@ -199,6 +200,12 @@ class Win(PagesMixin, Adw.ApplicationWindow):
     def run_cli(self, title, *args):
         argv, env = self.cli(*args)
         self.stream(title, argv, env)
+
+    def run_backup(self):
+        """The checklist dialog for "Back up now"; every other command uses run_cli's plain log."""
+        if not self.busy:
+            argv, env = self.cli("run", "--events")
+            BackupProgress(self, argv, env, *plan()).start()
 
     def set_busy(self, b):
         self.busy = b

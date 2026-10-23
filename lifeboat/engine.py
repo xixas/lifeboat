@@ -137,10 +137,16 @@ def has_files(path: str) -> bool:
     return any(files for _root, _dirs, files in os.walk(path))
 
 
-def dest_empty(cfg: Config, job: Job, env: dict) -> bool:
-    """True if the destination lists nothing. A missing one (rclone rc 3) counts as empty; any other failure does not."""
+def dest_state(cfg: Config, job: Job, env: dict) -> str:
+    """"empty" if the destination lists nothing (a missing one, rclone rc 3, counts), "has_files", or "unreadable"."""
     rc, out = rclone(cfg, ["lsf", job.dest, "--max-depth", "1"], env=env)
-    return rc == 3 or (rc == 0 and not out.strip())
+    if rc == 3 or (rc == 0 and not out.strip()):
+        return "empty"
+    return "has_files" if rc == 0 else "unreadable"
+
+
+def dest_empty(cfg: Config, job: Job, env: dict) -> bool:
+    return dest_state(cfg, job, env) == "empty"
 
 
 def run_settings(cfg: Config, emit: Emit | None = None) -> bool:
@@ -210,8 +216,10 @@ def check_probe(probe: str, rclone_config: str = "", env: dict | None = None) ->
 
 
 def run_backup(cfg: Config, dry_run: bool = False, now: datetime | None = None, emit: Emit | None = None,
-               settings: bool = True) -> dict:
-    """Optional settings command, then every job. Always writes last-run.json. Returns that state."""
+               settings: bool = True, on_event: Callable[[dict], None] | None = None) -> dict:
+    """Optional settings command, then every job. Always writes last-run.json. Returns that state.
+    `on_event` gets job_start / job_end (files copied, error text, a `reason` code for a failure) per job, for a progress display."""
+    event = on_event or (lambda _e: None)
     stamp = (now or datetime.now()).strftime(STAMP_FMT)
     state_dir().mkdir(parents=True, exist_ok=True)
     ran_settings = settings and bool(cfg.settings_command) and not dry_run
@@ -222,9 +230,12 @@ def run_backup(cfg: Config, dry_run: bool = False, now: datetime | None = None, 
     with open(state_dir() / "run.log", "a" if ran_settings else "w") as log:
         for job in cfg.jobs:
             t0 = time.monotonic()
+            event({"event": "job_start", "name": job.name})
+            files, error, reason = 0, "", ""
             src = os.path.expanduser(job.source)
             empty = not has_files(src)
-            skipped = empty and os.path.isdir(src) and dest_empty(cfg, job, env)
+            dest = dest_state(cfg, job, env) if empty and os.path.isdir(src) else ""
+            skipped = dest == "empty"
             if skipped:
                 msg = f"{job.name}: skipped — folder is empty, nothing to back up yet"
                 log.write(msg + "\n")
@@ -233,26 +244,42 @@ def run_backup(cfg: Config, dry_run: bool = False, now: datetime | None = None, 
                 # an empty destination folder keeps restore working for this job
                 rc = 0 if dry_run else rclone(cfg, ["mkdir", job.dest], env=env)[0]
                 if rc:
-                    skipped = False
-                    msg = f"{job.name}: could not create the empty backup folder {job.dest} (rclone exit {rc})"
+                    skipped, reason = False, "mkdir_failed"
+                    msg = error = f"{job.name}: could not create the empty backup folder {job.dest} (rclone exit {rc})"
                     log.write(msg + "\n")
                     if emit:
                         emit(msg)
             elif empty:
-                msg = f"{job.name}: refusing to sync: source {src} is missing or empty (unmounted drive or typo?) — nothing was changed"
+                reason = {"has_files": "empty_with_backup", "unreadable": "dest_unreadable"}.get(dest, "missing")
+                msg = error = f"{job.name}: refusing to sync: source {src} is missing or empty (unmounted drive or typo?) — nothing was changed"
                 log.write(msg + "\n")
                 if emit:
                     emit(msg)
                 rc = 2
             else:
                 args = job_args(cfg, job, stamp) + COMMON + (["--dry-run"] if dry_run else [])
-                rc = stream(rclone_argv(cfg, args), env, log, emit)
+
+                def watch(line: str) -> None:
+                    nonlocal files, error
+                    files += ": Copied" in line
+                    error = line if "ERROR" in line else error
+                    if emit:
+                        emit(line)
+                rc = stream(rclone_argv(cfg, args), env, log, watch)
+                if rc:
+                    reason = "rclone"
+                    error = error or f"{job.name}: rclone exited with code {rc}"
             results.append({"name": job.name, "rc": rc, "seconds": int(time.monotonic() - t0), "skipped": skipped})
+            event({"event": "job_end", "name": job.name, "rc": rc, "skipped": skipped, "files": files, "error": error,
+               "reason": reason})
             line = f"{job.name} rc={rc}"
             log.write(line + "\n")
             if emit:
                 emit(line)
         state = {"time": now_iso(), "dry_run": dry_run, "ok": all(r["rc"] == 0 for r in results), "jobs": results}
+        finishing = bool((cfg.manifest or cfg.probe) and not dry_run)
+        if finishing:
+            event({"event": "finishing_start"})
         if cfg.manifest and not dry_run:
             state["manifest"] = upload_manifest(cfg, state)
             line = f"manifest rc={state['manifest']['rc']}"
@@ -267,6 +294,8 @@ def run_backup(cfg: Config, dry_run: bool = False, now: datetime | None = None, 
             if emit:
                 emit(line)
             state["ok"] = state["ok"] and state["probe"]["ok"]
+        if finishing:
+            event({"event": "finishing_end", "ok": all(state[k]["ok"] for k in ("manifest", "probe") if k in state)})
     write_json("last-run.json", state)
     return state
 

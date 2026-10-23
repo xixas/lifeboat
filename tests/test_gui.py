@@ -65,6 +65,7 @@ def test_main_window_builds_with_and_without_config(env, make_cfg):
 
 
 PRELUDE = r'''
+import json
 import os
 import sys
 import time
@@ -222,6 +223,7 @@ setup.check_passphrase = lambda conf, pw, device: calls.append(("check", pw, dev
 
 win = Win(None)
 win.run_cli = lambda *a: calls.append(("run_cli",) + a)
+win.run_backup = lambda: calls.append(("run_backup",))
 win.refresh = lambda: calls.append(("refresh",))
 win.open_restore_wizard = lambda device=None, handover=None: calls.append(("restore", device))
 win.present()
@@ -294,7 +296,7 @@ stored.set_active(True)
 assert wiz.kit_go.get_sensitive()
 wiz.kit_go.emit("clicked")
 assert not wiz.get_can_close()
-assert pump(lambda: ("run_cli", "Back up now", "run") in calls), calls
+assert pump(lambda: ("run_backup",) in calls), calls
 assert ("make_remotes", TOKEN, pw) in calls
 cfgc = [c for c in calls if c[0] == "config"][0]
 assert cfgc[1] == "my-laptop" and cfgc[3] == "09:00" and cfgc[4] == []
@@ -303,7 +305,7 @@ assert str(HOME / "Extra") in chosen and str(HOME / ".ssh") in chosen, chosen
 assert [c for c in cfgc[2] if c["path"] == str(HOME / ".ssh")][0]["secret"] is True
 assert ("timer",) in calls
 order = [c[0] for c in calls]
-assert order.index("make_remotes") < order.index("config") < order.index("timer") < order.index("run_cli")
+assert order.index("make_remotes") < order.index("config") < order.index("timer") < order.index("run_backup")
 pump(timeout=0.3)
 assert wiz.token is None and wiz.passphrase is None  # dropped on close
 
@@ -361,7 +363,7 @@ assert wiz.pw_row.has_css_class("error") and tag() == "passphrase"
 shot("07b-passphrase-wrong")
 wiz.pw_row.set_text("right-pass")
 click(vis(), "Check")
-assert pump(lambda: ("run_cli", "Back up now", "run") in calls), calls
+assert pump(lambda: ("run_backup",) in calls), calls
 assert ("make_remotes", TOKEN, "right-pass") in calls
 cfgc = [c for c in calls if c[0] == "config"][0]
 assert cfgc[1] == "second" and cfgc[4] == [setup.default_device_name()]
@@ -426,7 +428,7 @@ assert pump(lambda: tag() == "setting-up" and wiz.get_can_close()), "dialog stuc
 txt = " ".join(labels(vis()))
 assert "Almost Done" in txt and "daily timer is not" in txt, txt
 assert "systemd isn't available" in txt and "No such file" not in txt, txt
-assert not any(c[0] == "run_cli" for c in calls)
+assert not any(c[0] == "run_backup" for c in calls)
 shot("09-timer-failed")
 calls.clear()
 click(vis(), "Close")
@@ -977,8 +979,150 @@ assert not CONF.exists()
 print("RESTORE OK")
 '''
 
+PROGRESS_BODY = r'''
+from gi.repository import Gio
+from lifeboat.app import progress
+
+progress.FileDialog = FakeFileDialog
+win.toast = lambda t: calls.append(("toast", t))
+win.refresh = lambda: calls.append(("refresh",))
+bp = progress.BackupProgress(win, ["true"], {}, ["documents", "photos", "ssh-keys", "empty"])
+wiz = bp.dlg  # shot() default target is wiz.get_child(); nothing is spawned, the test feeds the lines
+win.set_busy(True)
+bp.dlg.present(win)
+bp.dlg.set_can_close(False)
+rows = lambda: {s.title: s for s in [*bp.steps.values(), bp.finishing]}
+ev = lambda **kw: bp.on_event(json.dumps(kw))
+assert [s.state for s in rows().values()] == ["waiting"] * 5
+shot("progress-0-waiting")
+
+ev(event="job_start", name="documents")
+assert bp.wt.get_subtitle() == "0 of 5 done"
+bp.on_log("INFO : a.txt: Copied (new)")
+assert rows()["Documents"].state == "running" and not bp.dlg.get_can_close()
+shot("progress-1-running")
+ev(event="job_end", name="documents", rc=0, skipped=False, files=2, error="")
+ev(event="job_start", name="photos")
+bp.on_log("photos: refusing to sync: source /x is missing or empty - nothing was changed")
+ev(event="job_end", name="photos", rc=2, skipped=False, files=0, reason="empty_with_backup",
+   error="photos: refusing to sync: source /x is missing or empty - nothing was changed")
+ev(event="job_start", name="ssh-keys")
+ev(event="job_end", name="ssh-keys", rc=0, skipped=False, files=0, error="")
+ev(event="job_start", name="empty")
+ev(event="job_end", name="empty", rc=0, skipped=True, files=0, error="")
+ev(event="finishing_start")
+ev(event="finishing_end", ok=True)
+r = rows()
+assert [r[n].state for n in ("Documents", "Photos", "SSH keys", "Empty", "Finishing up")] == ["ok", "error", "ok", "skip", "ok"]
+assert r["Documents"].row.get_subtitle() == "Copied 2 files"
+assert r["SSH keys"].row.get_subtitle() == "Already up to date"
+assert r["Empty"].row.get_subtitle() == "Nothing to back up yet"
+assert r["Empty"].slot.get_first_child().has_css_class("dim-label")  # neutral, not the yellow of a warning
+assert isinstance(r["Photos"].row, Adw.ExpanderRow) and r["Photos"].row.get_expanded()
+assert "Is the drive plugged in" in r["Photos"].row.get_subtitle()
+assert bp.list.get_row_at_index(1) is r["Photos"].row  # swapped in place, order kept
+ev(event="done", ok=False)
+assert not bp.finished and not bp.retry.get_visible()  # the child may still be running
+bp._ended()
+assert bp.summary.get_label() == "1 folder not backed up", bp.summary.get_label()
+assert bp.summary_sub.get_label() == "The others are safe on Google Drive"
+assert bp.retry.get_visible() and bp.dlg.get_can_close()
+assert bp.wt.get_subtitle() == "Finished with problems"
+assert "Try Again" in [b.get_label() for b in buttons(bp.dlg.get_child())] and bp.retry.is_ancestor(bp.dlg) and bp.retry.get_visible()
+shot("progress-2-failed")
+
+for reason, want in (("missing", "doesn't exist any more"), ("dest_unreadable", "Check your connection"),
+                     ("mkdir_failed", "create its folder"), ("rclone", "ERROR : boom")):
+    st = progress.Step("x")
+    bp.list.append(st.row)
+    bp._job_end(st, {"rc": 1, "error": "ERROR : boom", "reason": reason})
+    assert want in st.row.get_subtitle(), (reason, st.row.get_subtitle())
+    bp.list.remove(st.row)
+
+# the Log toggle swaps pages, "Show in Log" lands on the failed job's lines
+assert bp.stack.get_visible_child_name() == "progress"
+click(bp.dlg.get_child(), "Show in Log")
+assert bp.stack.get_visible_child_name() == "log" and bp.log_btn.get_active() and not bp.progress_btn.get_active()
+assert "Copied (new)" in bp.buf.get_text(bp.buf.get_start_iter(), bp.buf.get_end_iter(), False)
+pump(timeout=1.5)  # let the toggle buttons finish their CSS transition before the snapshot
+shot("progress-3-log")
+# lines that are not events never raise (the dialog cannot be closed while it runs)
+for bad in ("{not json", "5", "[1]", json.dumps({"event": "job_start"}), json.dumps({"event": "job_end", "rc": 1}),
+            json.dumps({"event": "nonsense"})):
+    bp.on_event(bad)
+assert rows()["Photos"].state == "error"
+
+bp.progress_btn.set_active(True)
+assert bp.stack.get_visible_child_name() == "progress" and not bp.log_btn.get_active()
+bp.log_btn.set_active(True)
+
+click(bp.dlg.get_child(), "Copy Error")
+assert ("toast", "Copied") in calls
+saved = HOME / "kit.pdf"
+click(bp.dlg.get_child(), "Save Log…")
+assert "Copied (new)" in saved.read_text() and ("toast", "Log saved") in calls
+
+# Try Again resets the same dialog
+bp._reset()  # Try Again, with the Log showing, goes back to Progress
+assert bp.stack.get_visible_child_name() == "progress" and bp.progress_btn.get_active() and not bp.log_btn.get_active()
+assert [s.state for s in rows().values()] == ["waiting"] * 5 and not bp.retry.get_visible() and not bp.head.get_visible()
+
+# a clean run
+ev(event="job_start", name="documents")
+for n in ("documents", "photos", "ssh-keys", "empty"):
+    ev(event="job_end", name=n, rc=0, skipped=False, files=1, error="")
+ev(event="done", ok=True)
+bp._ended()
+assert bp.wt.get_subtitle() == "Finished" and bp.summary.get_label() == "Backed up" and bp.summary_sub.get_label() == "4 files copied"
+assert not bp.retry.get_visible() and bp.list.get_row_at_index(4) is None  # no finishing row when nothing finished up
+assert bp.progress_btn.get_active() and not bp.log_btn.get_active() and bp.stack.get_visible_child_name() == "progress"
+pump(timeout=1.5)  # let the toggle finish its CSS transition before the snapshot
+shot("progress-4-done")
+
+# Try Again via its button: spawns again, and a callback of the old run cannot touch the new one
+spawned = []
+def fake_spawn():
+    spawned.append(1)
+    return Gio.Subprocess.new(["sh", "-c", 'echo hello >&2; echo "$1"', "sh", json.dumps({"event": "done", "ok": True})],
+                              Gio.SubprocessFlags.STDOUT_PIPE | Gio.SubprocessFlags.STDERR_PIPE)
+bp._spawn = fake_spawn
+bp._reset()
+win.set_busy(False)
+ev(event="job_start", name="documents")
+bp.verdict = False
+bp._ended()
+assert bp.retry.get_visible()
+old_gen = bp.gen
+click(bp.dlg.get_child(), "Try Again")
+assert spawned == [1] and bp.gen == old_gen + 1 and not bp.finished
+bp._ended(old_gen)  # the previous run's late eof
+assert not bp.finished and win.busy
+assert pump(lambda: bp.finished), "the new run never finished"
+assert bp.summary.get_label() == "Backed up" and "hello" in bp.buf.get_text(bp.buf.get_start_iter(), bp.buf.get_end_iter(), False)
+
+# no manifest or passphrase check configured: no "Finishing up" row, and a failed run is still described truthfully
+bp2 = progress.BackupProgress(win, ["true"], {}, ["documents"], finishing=False)
+assert bp2.list.get_row_at_index(1) is None and bp2.wt.get_subtitle() == "0 of 1 done"
+win.set_busy(True)
+bp2.on_event(json.dumps({"event": "job_start", "name": "documents"}))
+bp2.on_event(json.dumps({"event": "job_end", "name": "documents", "rc": 0, "files": 1}))
+bp2.on_event(json.dumps({"event": "done", "ok": False}))  # e.g. the settings command failed
+bp2._ended()
+assert bp2.summary.get_label() == "Some steps didn't finish" and bp2.retry.get_visible()
+assert bp2.list.get_row_at_index(1) is None
+
+# a stream that ends without a verdict marks what was running as failed
+bp._reset()
+win.set_busy(True)
+ev(event="job_start", name="documents")
+bp._ended()
+assert rows()["Documents"].state == "error" and bp.summary.get_label() == "Backup didn't finish"
+print("PROGRESS OK")
+'''
+
 WIZARD_SCRIPT = PRELUDE + SETUP_BODY
 RESTORE_SCRIPT = PRELUDE + RESTORE_BODY
+PROGRESS_SCRIPT = PRELUDE + PROGRESS_BODY
 
 
 def run_broadway(env, script, expect):
@@ -1014,3 +1158,7 @@ def test_setup_wizard_walkthrough(env):
 
 def test_restore_wizard_walkthrough(env):
     run_broadway(env, RESTORE_SCRIPT, "RESTORE OK")
+
+
+def test_backup_checklist_dialog_follows_events(env):
+    run_broadway(env, PROGRESS_SCRIPT, "PROGRESS OK")

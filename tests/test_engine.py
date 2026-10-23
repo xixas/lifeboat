@@ -465,3 +465,90 @@ def test_no_retired_key_without_retired_jobs_and_an_unreadable_manifest_is_not_o
     assert "retired" not in json.loads((tmp_path / "drive" / "thinkpad" / "manifest.json").read_text())
     bad = make_cfg(device=device(tmp_path, manifest="nosuchremote:thinkpad/manifest.json"))
     assert engine.upload_manifest(bad, {"time": "t", "ok": True})["ok"] is False
+
+
+def test_run_backup_reports_job_events_with_file_counts(tmp_path, make_cfg, clock):
+    cfg = make_cfg()
+    (tmp_path / "src" / "a.txt").write_text("one")
+    (tmp_path / "src" / "b.txt").write_text("two")
+    events = []
+    engine.run_backup(cfg, now=clock(), on_event=events.append)
+    assert events[0] == {"event": "job_start", "name": "docs"}
+    assert events[1] == {"event": "job_end", "name": "docs", "rc": 0, "skipped": False, "files": 2, "error": "", "reason": ""}
+    events.clear()
+    engine.run_backup(cfg, now=clock(5), on_event=events.append)
+    assert events[1]["files"] == 0
+
+
+def test_job_end_carries_skip_and_error_text(tmp_path, make_cfg, clock, monkeypatch):
+    cfg = make_cfg()
+    events = []
+    engine.run_backup(cfg, now=clock(), on_event=events.append)
+    assert events[1]["skipped"] is True and events[1]["files"] == 0 and events[1]["error"] == ""
+    events.clear()
+    (tmp_path / "src").rmdir()
+    engine.run_backup(cfg, now=clock(5), on_event=events.append)
+    assert events[1]["rc"] == 2 and "refusing to sync" in events[1]["error"]
+    events.clear()
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "a.txt").write_text("one")
+
+    def broken(argv, env, log, emit=None):
+        emit("ERROR : a.txt: Failed to copy: boom")
+        return 1
+    monkeypatch.setattr(engine, "stream", broken)
+    engine.run_backup(cfg, now=clock(9), on_event=events.append)
+    assert events[1]["rc"] == 1 and events[1]["error"] == "ERROR : a.txt: Failed to copy: boom"
+
+
+def test_manifest_and_probe_are_one_finishing_step(tmp_path, make_cfg, clock):
+    cfg = make_cfg(crypt=True, device=device(tmp_path, probe=True))
+    (tmp_path / "src" / "a.txt").write_text("one")
+    events = []
+    engine.run_backup(cfg, now=clock(), on_event=events.append)
+    assert [e["event"] for e in events] == ["job_start", "job_end", "finishing_start", "finishing_end"]
+    assert events[3]["ok"] is True
+    events.clear()
+    engine.run_backup(cfg, dry_run=True, now=clock(5), on_event=events.append)
+    assert [e["event"] for e in events] == ["job_start", "job_end"]
+
+
+def _reason(cfg, clock, **kw):
+    events = []
+    engine.run_backup(cfg, now=clock(), on_event=events.append, **kw)
+    return events[1]["reason"]
+
+
+def test_job_end_reason_missing_folder(tmp_path, make_cfg, clock):
+    cfg = make_cfg()
+    (tmp_path / "src").rmdir()
+    assert _reason(cfg, clock) == "missing"
+
+
+def test_job_end_reason_empty_folder_with_a_backup(tmp_path, make_cfg, clock):
+    cfg = make_cfg()
+    (tmp_path / "dest").mkdir()
+    (tmp_path / "dest" / "a.txt").write_text("one")
+    assert _reason(cfg, clock) == "empty_with_backup"
+
+
+def test_job_end_reason_unreadable_destination(tmp_path, make_cfg, clock, monkeypatch):
+    cfg = make_cfg()
+    real = engine.rclone
+    monkeypatch.setattr(engine, "rclone", lambda c, args, **kw: (1, "") if args[0] == "lsf" else real(c, args, **kw))
+    assert _reason(cfg, clock) == "dest_unreadable"
+
+
+def test_job_end_reason_mkdir_failed(tmp_path, make_cfg, clock, monkeypatch):
+    cfg = make_cfg()
+    real = engine.rclone
+    monkeypatch.setattr(engine, "rclone", lambda c, args, **kw: (1, "") if args[0] == "mkdir" else real(c, args, **kw))
+    assert _reason(cfg, clock) == "mkdir_failed"
+
+
+def test_job_end_reason_rclone_failure_and_success(tmp_path, make_cfg, clock, monkeypatch):
+    cfg = make_cfg()
+    (tmp_path / "src" / "a.txt").write_text("one")
+    assert _reason(cfg, clock) == ""
+    monkeypatch.setattr(engine, "stream", lambda argv, env, log, emit=None: 1)
+    assert _reason(cfg, clock) == "rclone"

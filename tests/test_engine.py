@@ -281,6 +281,15 @@ def test_a_skipped_job_restores_cleanly_and_skips_again(tmp_path, make_cfg, cloc
     assert st["ok"] and st["jobs"][0]["skipped"] is True
 
 
+def test_a_failed_mkdir_is_a_failure_not_a_skip(tmp_path, make_cfg, clock, monkeypatch):
+    cfg = make_cfg()
+    real = engine.rclone
+    monkeypatch.setattr(engine, "rclone", lambda c, args, **kw: (1, "") if args[0] == "mkdir" else real(c, args, **kw))
+    st = engine.run_backup(cfg, now=clock())
+    assert st["ok"] is False and st["jobs"][0]["rc"] == 1 and st["jobs"][0]["skipped"] is False
+    assert "could not create the empty backup folder" in read(engine.state_dir() / "run.log")
+
+
 def test_a_dry_run_skip_creates_nothing(tmp_path, make_cfg, clock):
     cfg = make_cfg()
     st = engine.run_backup(cfg, dry_run=True, now=clock())

@@ -232,6 +232,12 @@ def run_backup(cfg: Config, dry_run: bool = False, now: datetime | None = None, 
                     emit(msg)
                 # an empty destination folder keeps restore working for this job
                 rc = 0 if dry_run else rclone(cfg, ["mkdir", job.dest], env=env)[0]
+                if rc:
+                    skipped = False
+                    msg = f"{job.name}: could not create the empty backup folder {job.dest} (rclone exit {rc})"
+                    log.write(msg + "\n")
+                    if emit:
+                        emit(msg)
             elif empty:
                 msg = f"{job.name}: refusing to sync: source {src} is missing or empty (unmounted drive or typo?) — nothing was changed"
                 log.write(msg + "\n")

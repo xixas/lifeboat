@@ -2,10 +2,12 @@
 from __future__ import annotations
 
 import os
+from datetime import datetime
 
 from lifeboat.config import NAME_RE
+from lifeboat.engine import parse_time
+from lifeboat.setup import SECRET_FOLDERS, _slug, with_size
 from lifeboat.setup import _collapse_home as tilde  # noqa: F401  (re-exported for the wizard)
-from lifeboat.setup import with_size
 
 DEFAULT_TIME = "13:00"
 
@@ -23,6 +25,30 @@ def validate_device_name(name: str, existing: list[str]) -> str | None:
     if name in existing:
         return "Another laptop on this account already uses this name."
     return None
+
+
+def job_label(name: str) -> str:
+    """A manifest job's name ('ssh-keys') as a title fit for a row ('SSH keys')."""
+    for _key, label, _dir in SECRET_FOLDERS:
+        if _slug(label).lower() == name:
+            return label
+    text = name.replace("-", " ").replace("_", " ")
+    return text[:1].upper() + text[1:]
+
+
+def keep_backing_up_default(manifest: dict, now: datetime) -> bool:
+    """Continue the old device's backups by default only when its last run is over 24 h old (or unreadable): a laptop
+    that backed up today is probably still in use, and two laptops must not share one backup folder."""
+    t = parse_time(manifest.get("time"))
+    if t is not None and t.tzinfo is None:
+        now = now.replace(tzinfo=None)
+    return t is None or (now - t).total_seconds() > 24 * 3600
+
+
+def since_text(iso) -> str:
+    """'Not backed up since 2 Oct 2026' for a retired job."""
+    t = parse_time(iso)
+    return f"Not backed up since {t.day} {t.strftime('%b %Y')}" if t else "Not backed up from the old laptop"
 
 
 def fmt_size(size: int | None, complete: bool) -> str:

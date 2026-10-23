@@ -12,7 +12,8 @@ from gi.repository import Adw, Gio, GLib, Gtk  # noqa: E402
 from lifeboat import APP_ID, engine  # noqa: E402
 from lifeboat.app.pages import PAGE_ICONS, PAGE_NAMES, PagesMixin  # noqa: E402
 from lifeboat.app.reader import read_lines  # noqa: E402
-from lifeboat.app.widgets import CSS, ICONS, spinner  # noqa: E402
+from lifeboat.app.widgets import CSS, ICONS, copy_text, spinner  # noqa: E402
+from lifeboat.app.wizard import SetupWizard  # noqa: E402
 from lifeboat.config import ConfigError, config_path, load_config  # noqa: E402
 
 DOT_PAGES = ("overview", "backups", "settings", "skills")
@@ -170,7 +171,7 @@ class Win(PagesMixin, Adw.ApplicationWindow):
         return b
 
     def copy(self, text):
-        self.get_display().get_clipboard().set_text(text)
+        copy_text(self, text)
         self.toast("Copied")
 
     def open_url(self, url):
@@ -178,6 +179,13 @@ class Win(PagesMixin, Adw.ApplicationWindow):
 
     def open_path(self, path):
         self.open_url(Path(path).resolve().as_uri())
+
+    # -- wizards
+    def open_setup_wizard(self):
+        SetupWizard(self).present(self)
+
+    def open_restore_wizard(self, device=None):
+        self.toast("Coming soon")  # slice 5
 
     # -- actions
     @staticmethod
@@ -196,10 +204,16 @@ class Win(PagesMixin, Adw.ApplicationWindow):
         for x in self.action_btns:
             x.set_sensitive(not b)
 
-    def in_thread(self, work, done):
-        """Run work() off the main loop and pass its result to done() on it."""
+    def in_thread(self, work, done, fail=None):
+        """Run work() off the main loop and pass its result to done() on it. If work raises, fail(exception) runs
+        instead (default: a toast), so a caller waiting on done() is never left hanging."""
         def target():
-            res = work()
+            try:
+                res = work()
+            except Exception as e:  # noqa: BLE001
+                print("background task failed:", type(e).__name__, file=sys.stderr)  # never the message: it could hold a secret
+                GLib.idle_add(fail or (lambda _e: self.toast("Something went wrong")), e)
+                return
             GLib.idle_add(done, res)
         threading.Thread(target=target, daemon=True).start()
 

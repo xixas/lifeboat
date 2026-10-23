@@ -35,9 +35,13 @@ class PagesMixin:
         if d["kind"] == "noconfig":
             sp = Adw.StatusPage(icon_name=APP_ID, title="Not set up yet",
                                 description=f"Lifeboat reads its jobs from {d['path']}. "
-                                            "Create an example config, then edit it to match your folders and rclone remotes.")
-            sp.set_child(self._box([self.button("Create example config", self.create_example,
-                                                ("pill", "suggested-action"), False)]))
+                                            "Set up a backup in a few steps, or create an example config to edit yourself.")
+            box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12, halign=Gtk.Align.CENTER, margin_top=6, margin_bottom=6)
+            for b in (self.button("Set Up Backup", self.open_setup_wizard, ("pill", "suggested-action"), False),
+                      self.button("Restore From a Backup", self.open_restore_wizard, ("pill",), False),
+                      self.button("Edit a config file instead", self.create_example, ("flat",), False)):
+                box.append(b)
+            sp.set_child(box)
         else:
             sp = Adw.StatusPage(icon_name="dialog-error-symbolic", title="Config problem", description=d["error"])
             sp.set_child(self._box([self.button("Open config file", lambda: self.open_path(d["path"]), ("pill",), False)]))

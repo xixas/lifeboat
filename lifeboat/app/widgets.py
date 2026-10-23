@@ -5,7 +5,7 @@ import gi
 
 gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
-from gi.repository import Adw, Gtk  # noqa: E402
+from gi.repository import Adw, Gdk, Gtk  # noqa: E402
 
 from lifeboat.engine import parse_time  # noqa: E402
 
@@ -61,3 +61,10 @@ def group(title=None, desc=None, rows=()):
     for r in rows:
         g.add(r)
     return g
+
+
+def copy_text(widget, text: str) -> Gdk.Clipboard:
+    """Put text on the clipboard of widget's display (Gdk.Clipboard has no set_text in PyGObject) and return the clipboard."""
+    clip = widget.get_display().get_clipboard()
+    clip.set_content(Gdk.ContentProvider.new_for_value(text))
+    return clip

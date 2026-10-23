@@ -19,6 +19,8 @@ def skills() -> dict:
             continue
         if (p / ".git").exists():
             ext.setdefault("local git checkout", []).append(p.name)
+        elif isinstance(marker := read_json(p / "agent-native-skill.json"), dict):
+            ext.setdefault(str(marker.get("source") or "agent-native"), []).append(p.name)
         else:
             own.append(p.name)
     for v in ext.values():

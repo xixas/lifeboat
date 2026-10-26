@@ -336,6 +336,13 @@ def test_with_size_turns_large_or_unfinished_folders_off():
     assert f == {"key": "videos", "default_on": True}  # not mutated
 
 
+def test_with_size_hints_that_an_empty_folder_stays_on():
+    f = {"key": "pictures", "default_on": True}
+    e = setup.with_size(f, 0, True)
+    assert e["default_on"] is True and e["hint"] == "Empty — backed up once you add files"
+    assert "hint" not in setup.with_size(f, 0, False)
+
+
 def test_parse_user_dirs_reads_home_relative_and_absolute_paths():
     text = '# comment\nXDG_DOCUMENTS_DIR="$HOME/Docs"\nXDG_MUSIC_DIR="/data/music"\nXDG_VIDEOS_DIR="$HOME/"\nbad line\n'
     assert setup.parse_user_dirs(text, "/home/u") == {"DOCUMENTS": "/home/u/Docs", "MUSIC": "/data/music", "VIDEOS": "/home/u"}

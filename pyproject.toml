@@ -21,6 +21,9 @@ Homepage = "https://github.com/xixas/lifeboat"
 [tool.setuptools.packages.find]
 include = ["lifeboat*"]
 
+[tool.setuptools.package-data]
+lifeboat = ["signin_page.html"]
+
 [tool.ruff]
 line-length = 130
 

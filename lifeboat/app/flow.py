@@ -103,9 +103,13 @@ class AccountDialog(Adw.Dialog):
         return page
 
     def _bar(self, *buttons):
-        box = Gtk.Box(spacing=12, halign=Gtk.Align.CENTER, margin_top=12, margin_bottom=12, margin_start=24, margin_end=24)
+        # wraps, so two long pills stack instead of widening the dialog
+        box = Gtk.FlowBox(selection_mode=Gtk.SelectionMode.NONE, homogeneous=False, column_spacing=12, row_spacing=12,
+                          max_children_per_line=len(buttons), halign=Gtk.Align.CENTER, margin_top=12, margin_bottom=12,
+                          margin_start=24, margin_end=24)
         for b in buttons:
             box.append(b)
+            box.get_last_child().set_focusable(False)  # the wrapper is not a tab stop; the button is
         self._bp.add_setter(box, "margin-start", 12)
         self._bp.add_setter(box, "margin-end", 12)
         return box

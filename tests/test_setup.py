@@ -4,6 +4,7 @@ import json
 import os
 import re
 import shutil
+import signal
 import socket
 import stat
 import subprocess
@@ -33,6 +34,7 @@ def fresh_client_values():
     yield
     setup.client_id.cache_clear()
     setup.client_secret.cache_clear()
+    setup.rclone_supports_template.cache_clear()
 
 
 def test_new_passphrase_is_six_groups_of_five_unambiguous_chars():
@@ -76,9 +78,10 @@ def fake_rclone(tmp_path, monkeypatch):
     bindir = tmp_path / "fakebin"
     bindir.mkdir()
 
-    def make(mode: str):
+    def make(mode: str, template: bool = False):
         script = bindir / "rclone"
         script.write_text(f"""#!/bin/sh
+[ "$2" = "--help" ] && {{ {'echo "      --template string   path to a Go template"; ' if template else ''}exit 0; }}
 echo $$ > "{tmp_path}/fake.pid"
 echo "$RCLONE_DRIVE_SCOPE|$RCLONE_DRIVE_CLIENT_ID|$*" > "{tmp_path}/fake.args"
 case {mode} in
@@ -126,6 +129,66 @@ def test_signin_success_exposes_url_then_token(fake_rclone):
     assert scope == "drive.file" and client_id == setup.client_id()
     assert "authorize drive --auth-no-open-browser --config /dev/null" in args
     assert setup.client_secret() not in args  # never in argv
+
+
+def test_signin_passes_the_branded_page_when_rclone_supports_templates(fake_rclone):
+    tmp = fake_rclone("ok", template=True)
+    setup.rclone_supports_template.cache_clear()
+    si = setup.SignIn()
+    si.start()
+    drain(si)
+    args = (tmp / "fake.args").read_text().split("|", 2)[2].split()
+    page = Path(args[args.index("--template") + 1])
+    assert page == setup.SIGNIN_PAGE and "Lifeboat" in page.read_text()
+
+
+def test_signin_omits_template_for_an_older_rclone(fake_rclone):
+    tmp = fake_rclone("ok")
+    setup.rclone_supports_template.cache_clear()
+    si = setup.SignIn()
+    si.start()
+    drain(si)
+    assert "--template" not in (tmp / "fake.args").read_text()
+
+
+def _rendered_by_rclone(query: str) -> str:
+    """Run the real `rclone authorize` with our page, hit its local callback and return the HTML it served."""
+    proc = subprocess.Popen(["rclone", "authorize", "drive", "--auth-no-open-browser", "--config", os.devnull,
+                             "--template", str(setup.SIGNIN_PAGE)], stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                            stderr=subprocess.PIPE, text=True, start_new_session=True)
+    try:
+        url, buf = None, ""
+        for line in proc.stderr:
+            buf += line
+            url = setup.parse_auth_url(buf)
+            if url:
+                break
+        assert url, buf
+        state = urllib.parse.parse_qs(urllib.parse.urlparse(url).query)["state"][0]
+        try:
+            with urllib.request.urlopen(f"http://127.0.0.1:53682/?state={state}&{query}", timeout=10) as r:
+                return r.read().decode()
+        except urllib.error.HTTPError as e:  # the error page is served with a 400
+            return e.read().decode()
+    finally:
+        os.killpg(proc.pid, signal.SIGKILL)
+        proc.wait()
+
+
+needs_template = pytest.mark.skipif(not shutil.which("rclone") or not setup.rclone_supports_template(),
+                                    reason="rclone lacks authorize --template")
+
+
+@needs_template
+def test_page_renders_the_success_state_through_real_rclone():
+    html = _rendered_by_rclone("code=abc")
+    assert "Lifeboat" in html and "signed in" in html and "Sign-in didn" not in html
+
+
+@needs_template
+def test_page_renders_the_error_state_through_real_rclone():
+    html = _rendered_by_rclone("error=access_denied")
+    assert "Sign-in didn" in html and "access_denied" in html and "signed in" not in html
 
 
 def test_signin_times_out_and_kills_rclone(fake_rclone):

@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<!-- Shown in the browser after Google sign-in; rclone fills it in (Go html/template: .OK .Name .Description .Code .HelpURL). Self-contained: no external requests. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{ if .OK }}Signed in{{ else }}Sign-in didn't work{{ end }} - Lifeboat</title>
+<style>
+  :root { color-scheme: light dark; --bg: #fafafa; --card: #fff; --fg: #1e1e24; --muted: #5e5c64; --line: #deddda; --ok: #1a7f4b; --bad: #c01c28; }
+  @media (prefers-color-scheme: dark) { :root { --bg: #1d1d20; --card: #2a2a2e; --fg: #f2f2f2; --muted: #b0aeb6; --line: #444448; --ok: #57e389; --bad: #ff7b63; } }
+  body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: var(--bg); color: var(--fg); font: 16px/1.5 Cantarell, system-ui, sans-serif; }
+  main { box-sizing: border-box; width: min(440px, calc(100% - 32px)); padding: 36px 32px; text-align: center; background: var(--card); border: 1px solid var(--line); border-radius: 16px; }
+  svg { width: 72px; height: 72px; }
+  h1 { margin: 16px 0 8px; font-size: 1.5rem; }
+  p { margin: 0; color: var(--muted); }
+  .status { margin-top: 20px; font-weight: 700; color: var(--ok); }
+  .bad .status { color: var(--bad); }
+  .detail { margin-top: 20px; padding: 10px 12px; text-align: left; font-size: .85rem; border: 1px solid var(--line); border-radius: 8px; color: var(--muted); overflow-wrap: anywhere; }
+  a { color: inherit; }
+</style>
+</head>
+<body>
+<main{{ if not .OK }} class="bad"{{ end }}>
+  <svg viewBox="0 0 128 128" aria-hidden="true">
+    <circle cx="64" cy="64" r="48" fill="none" stroke="#e01b24" stroke-width="28" stroke-dasharray="37.7 37.7" stroke-dashoffset="18.85" transform="rotate(-90 64 64)"/>
+    <circle cx="64" cy="64" r="48" fill="none" stroke="#ffffff" stroke-width="28" stroke-dasharray="37.7 37.7" stroke-dashoffset="-18.85" transform="rotate(-90 64 64)"/>
+    <circle cx="64" cy="64" r="62" fill="none" stroke="#c0bfbc" stroke-width="2"/>
+    <circle cx="64" cy="64" r="34" fill="none" stroke="#c0bfbc" stroke-width="2"/>
+  </svg>
+{{ if .OK }}
+  <h1>You're signed in</h1>
+  <p>Lifeboat can now reach your Google Drive. Return to Lifeboat to finish. You can close this tab.</p>
+  <p class="status">Connected to Google Drive</p>
+{{ else }}
+  <h1>Sign-in didn't work</h1>
+  <p>Lifeboat couldn't connect to your Google Drive. Return to Lifeboat and try again.</p>
+  <div class="detail">
+    {{ .Name }}{{ if .Description }}: {{ .Description }}{{ end }}{{ if .Code }}<br>Code: {{ .Code }}{{ end }}{{ if .HelpURL }}<br><a href="{{ .HelpURL }}">{{ .HelpURL }}</a>{{ end }}
+  </div>
+{{ end }}
+</main>
+</body>
+</html>

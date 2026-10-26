@@ -36,6 +36,7 @@ class RestoreWizard(AccountDialog):
         self.keep_row = self.name_row = None
         self.cfg = self.rcfg = None  # the config written for this laptop; the in-memory one that reads the old backup
         self.names, self.keep, self.device = [], True, ""
+        self.same_laptop = None  # the device the setup wizard recognised as this laptop's own backup
         self.written: set[str] = set()  # jobs in the config written so far (keep-backing-up mode)
         self.cfg_ours = self.timer_done = False
         self.cfg_err = None
@@ -49,6 +50,7 @@ class RestoreWizard(AccountDialog):
             self.token = handover["token"]
             self.existing = handover["existing"]
             self._conf_made_here = handover["conf_made_here"]
+            self.same_laptop = handover.get("same_laptop")
             self.mode = "add"
             if device in self._names():
                 self._pick(device)
@@ -150,7 +152,8 @@ class RestoreWizard(AccountDialog):
         pg.add(gn)
         ga = Adw.PreferencesGroup(title="After Restoring")
         self.keep_row = Adw.SwitchRow(title="Keep Backing Up to This Backup", subtitle="Turn off if the old laptop is still in use",
-                                      active=keep_backing_up_default(self.manifest, datetime.now().astimezone()))
+                                      active=keep_backing_up_default(self.manifest, datetime.now().astimezone(),
+                                                                     self.picked == self.same_laptop))
         self.keep_row.connect("notify::active", lambda *_: self._validate())
         ga.add(self.keep_row)
         default = setup.unique_device_name(setup.default_device_name(), self._names())

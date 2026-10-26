@@ -9,6 +9,7 @@ from lifeboat.app.wizard_state import (
     folders_text,
     job_label,
     keep_backing_up_default,
+    same_laptop_backup,
     since_text,
     tilde,
     validate_device_name,
@@ -108,3 +109,24 @@ def test_keep_backing_up_defaults_on_only_when_the_old_laptop_looks_gone():
 def test_since_text():
     assert since_text("2026-10-02T09:00:00+00:00") == "Not backed up since 2 Oct 2026"
     assert since_text(None) == "Not backed up from the old laptop"
+
+
+def test_same_laptop_matches_the_manifest_host():
+    mine = {"device": "work", "host": "fedora-box"}
+    assert same_laptop_backup([{"device": "other", "host": "x"}, mine], "fedora-box", "fedora-box") == "work"
+    assert same_laptop_backup([{"device": "other", "host": "x"}], "fedora-box", "fedora-box") is None
+
+
+def test_same_laptop_ignores_a_distro_default_hostname():
+    # 'fedora' is every fresh Fedora install: matching it would point a new laptop at a stranger's backup
+    for host in ("fedora", "localhost.localdomain", "localhost", "ubuntu", "nobara"):
+        assert same_laptop_backup([{"device": host, "host": host}], host, host) is None, host
+
+
+def test_keep_backing_up_defaults_on_for_this_laptops_own_backup():
+    # a reinstall: the backup is this laptop's, so a fresh last run does not mean another laptop is still using it
+    now = datetime(2026, 10, 23, 12, 0, tzinfo=UTC)
+    ago = lambda h: {"time": (now - timedelta(hours=h)).isoformat()}  # noqa: E731
+    assert keep_backing_up_default(ago(2), now, same_laptop=True) is True
+    # but not minutes ago: a reinstall cannot have backed up that recently, a cloned disk still running can
+    assert keep_backing_up_default(ago(0.5), now, same_laptop=True) is False

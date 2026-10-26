@@ -15,12 +15,14 @@ from pathlib import Path
 
 from lifeboat import __version__
 from lifeboat.config import Config, ConfigError, Job
+from lifeboat.runlog import Rclone, RunLog, human_size, plural
 
 STAMP_FMT = "%Y-%m-%d_%H%M%S"
 STAMP_RE = re.compile(r"^\d{4}-\d{2}-\d{2}_\d{6}$")
 STALE_DAYS = 2
 ANSI = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\r")
 COMMON = ["--log-level", "INFO", "--stats", "0", "--fast-list"]
+JSON_LOG = ["--use-json-log"]  # one JSON record per line, rewritten by lifeboat.runlog; --stats 0 means no stats record
 Emit = Callable[[str], None]
 
 
@@ -97,23 +99,26 @@ def rclone(cfg: Config, args: list[str], timeout: int | None = 120, input: str |
         return 127, ""
 
 
-def stream(argv: list[str], env: dict, log, emit: Emit | None = None) -> int:
-    """Run argv; send each merged output line to the open file `log` and the `emit` callback."""
-    try:
-        p = subprocess.Popen(argv, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
-                             errors="replace", stdin=subprocess.DEVNULL)
-    except OSError as e:
-        msg = f"could not start {argv[0]}: {e.strerror or e}"
-        log.write(msg + "\n")
-        if emit:
-            emit(msg)
-        return 127
-    for line in p.stdout:
-        line = ANSI.sub("", line.rstrip("\n"))
+def stream(argv: list[str], env: dict, log, emit: Emit | None = None, handle: Callable[[str], str | None] | None = None) -> int:
+    """Run argv; send each merged output line to the open file `log` and the `emit` callback.
+    `handle` turns a raw line into the line to show, or None to drop it."""
+    def show(line: str) -> None:
+        line = handle(line) if handle else line
+        if line is None:
+            return
         log.write(line + "\n")
         log.flush()
         if emit:
             emit(line)
+
+    try:
+        p = subprocess.Popen(argv, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+                             errors="replace", stdin=subprocess.DEVNULL)
+    except OSError as e:
+        show(f"could not start {argv[0]}: {e.strerror or e}")
+        return 127
+    for line in p.stdout:
+        show(ANSI.sub("", line.rstrip("\n")))
     return p.wait()
 
 
@@ -137,10 +142,23 @@ def has_files(path: str) -> bool:
     return any(files for _root, _dirs, files in os.walk(path))
 
 
-def dest_empty(cfg: Config, job: Job, env: dict) -> bool:
-    """True if the destination lists nothing. A missing one (rclone rc 3) counts as empty; any other failure does not."""
+def dest_state(cfg: Config, job: Job, env: dict) -> str:
+    """"empty" if the destination lists nothing (a missing one, rclone rc 3, counts), "has_files", or "unreadable"."""
     rc, out = rclone(cfg, ["lsf", job.dest, "--max-depth", "1"], env=env)
-    return rc == 3 or (rc == 0 and not out.strip())
+    if rc == 3 or (rc == 0 and not out.strip()):
+        return "empty"
+    return "has_files" if rc == 0 else "unreadable"
+
+
+def dest_empty(cfg: Config, job: Job, env: dict) -> bool:
+    return dest_state(cfg, job, env) == "empty"
+
+
+def _run_settings(cfg: Config, rl: RunLog) -> bool:
+    rl.line("Settings", f"$ {cfg.settings_command}")
+    rc = stream(["sh", "-c", cfg.settings_command], rclone_env(cfg), rl.log, rl.emit, lambda raw: rl.stamp("Settings", raw))
+    write_json("settings.json", {"time": now_iso(), "ok": rc == 0, "rc": rc})
+    return rc == 0
 
 
 def run_settings(cfg: Config, emit: Emit | None = None) -> bool:
@@ -149,10 +167,7 @@ def run_settings(cfg: Config, emit: Emit | None = None) -> bool:
         return True
     state_dir().mkdir(parents=True, exist_ok=True)
     with open(state_dir() / "run.log", "w") as log:
-        log.write(f"$ {cfg.settings_command}\n")
-        rc = stream(["sh", "-c", cfg.settings_command], rclone_env(cfg), log, emit)
-    write_json("settings.json", {"time": now_iso(), "ok": rc == 0, "rc": rc})
-    return rc == 0
+        return _run_settings(cfg, RunLog(log, emit))
 
 
 def _job_doc(j: Job) -> dict:
@@ -202,6 +217,57 @@ def ensure_probe(cfg: Config) -> dict:
     return {"ok": rc == 0, "rc": rc}
 
 
+def crypt_target(cfg: Config, name: str) -> str:
+    """The `remote =` a crypt remote points at ("" if unknown). Env vars (RCLONE_CONFIG_<NAME>_REMOTE) beat the config file, as in rclone."""
+    env = rclone_env(cfg)
+    if target := env.get(f"RCLONE_CONFIG_{re.sub('[^A-Z0-9]', '_', name.upper())}_REMOTE"):
+        return target
+    rc, out = rclone(cfg, ["config", "dump"], env=env)
+    try:
+        return str(json.loads(out)[name]["remote"]) if rc == 0 else ""
+    except (ValueError, KeyError, TypeError):
+        return ""
+
+
+def passphrase_state(cfg: Config) -> str:
+    """"ok" (the probe reads back), "new" (nothing is stored yet, or it is only other devices' data under this same key: safe to
+    create the probe), "wrong" (data exists under a key this passphrase cannot read) or "unknown" (could not tell: treat as unsafe)."""
+    if check_probe(cfg.probe, cfg.rclone_config, rclone_env(cfg)):
+        return "ok"
+    name = cfg.probe.partition(":")[0]
+    target = crypt_target(cfg, name)
+    if not target:
+        return "unknown"
+    rc, out = rclone(cfg, ["lsf", target, "--max-depth", "1"])
+    if rc == 3 or (rc == 0 and not out.strip()):
+        return "new"
+    if rc != 0:
+        return "unknown"
+    # Listing alone proves nothing: a wrong key yields a garbage name now and then (~0.4% of entries pass unpadding).
+    rc, out = rclone(cfg, ["lsf", "--dirs-only", f"{name}:"])
+    if rc != 0:
+        return "unknown"
+    for d in out.split():  # every device's probe sits at <device>/.lifeboat-probe; reading it proves the key
+        if check_probe(f"{name}:{d.rstrip('/')}/.lifeboat-probe", cfg.rclone_config, rclone_env(cfg)):
+            return "new"
+    rc, out = rclone(cfg, ["lsf", "-R", "--files-only", "--max-depth", "3", f"{name}:"])
+    first = out.split("\n")[0] if rc == 0 else ""
+    if first:  # content is MAC-authenticated: one byte decrypts only under the right key
+        try:
+            p = subprocess.run(rclone_argv(cfg, ["cat", "--count", "1", f"{name}:{first}"]), env=rclone_env(cfg), capture_output=True,
+                               text=True, timeout=120, stdin=subprocess.DEVNULL)
+        except (OSError, subprocess.TimeoutExpired):
+            return "unknown"
+        # only a failed MAC says "wrong key"; a dropped connection says nothing (setup.py never calls that wrong either)
+        return "new" if p.returncode == 0 else "wrong" if "bad password" in p.stderr else "unknown"
+    # no readable file: only empty dirs (every raw name decrypts) or a wrong key (names drop out of the crypt listing)
+    rc, plain = rclone(cfg, ["lsf", "-R", "--max-depth", "3", f"{name}:"])
+    rc2, raw = rclone(cfg, ["lsf", "-R", "--max-depth", "3", target])
+    if rc or rc2:
+        return "unknown"
+    return "new" if len(plain.split("\n")) == len(raw.split("\n")) else "wrong"
+
+
 def check_probe(probe: str, rclone_config: str = "", env: dict | None = None) -> bool:
     """True only if the probe reads back through its crypt remote. A crypt remote's root listing succeeds with a
     wrong password; reading a known file does not. Works without a Lifeboat config (restore wizard)."""
@@ -210,63 +276,100 @@ def check_probe(probe: str, rclone_config: str = "", env: dict | None = None) ->
 
 
 def run_backup(cfg: Config, dry_run: bool = False, now: datetime | None = None, emit: Emit | None = None,
-               settings: bool = True) -> dict:
-    """Optional settings command, then every job. Always writes last-run.json. Returns that state."""
+               settings: bool = True, on_event: Callable[[dict], None] | None = None) -> dict:
+    """Optional settings command, then every job. Always writes last-run.json. Returns that state.
+    `on_event` gets job_start / job_end (files copied, error text, a `reason` code for a failure) per job, for a progress display.
+    `emit` gets the readable run log, the same lines as run.log."""
+    from lifeboat.app.wizard_state import job_label  # GTK-free; imported late because it imports this module
+    event = on_event or (lambda _e: None)
     stamp = (now or datetime.now()).strftime(STAMP_FMT)
     state_dir().mkdir(parents=True, exist_ok=True)
-    ran_settings = settings and bool(cfg.settings_command) and not dry_run
-    if ran_settings:
-        run_settings(cfg, emit)
-    results = []
+    t_run = time.monotonic()
     env = rclone_env(cfg)
-    with open(state_dir() / "run.log", "a" if ran_settings else "w") as log:
+    results, copied, copied_bytes = [], 0, 0
+    with open(state_dir() / "run.log", "w") as log:
+        rl = RunLog(log, emit)
+        what = "dry run" if dry_run else "backup"
+        rl.raw(f"Lifeboat {__version__} · {what}{' of ' + cfg.device_name if cfg.device_name else ''} · "
+               f"{datetime.now():%a %d %b %Y %H:%M:%S}")
+        if settings and cfg.settings_command and not dry_run:
+            _run_settings(cfg, rl)
+        pstate = passphrase_state(cfg) if cfg.probe and any(j.encrypted for j in cfg.jobs) else "ok"
+        refuse = {"wrong": "wrong_passphrase", "unknown": "dest_unreadable"}.get(pstate, "")
+        probe = ensure_probe(cfg) if pstate == "new" and not dry_run else None  # before any upload, so an interrupted first run still leaves one
         for job in cfg.jobs:
-            t0 = time.monotonic()
+            t0, label = time.monotonic(), job_label(job.name)
+            event({"event": "job_start", "name": job.name})
+            files, error, reason = 0, "", ""
             src = os.path.expanduser(job.source)
+            rl.line(label, f"{job.source} → Google Drive: {job.dest.partition(':')[2] or job.dest}"
+                           f"{' (encrypted)' if job.encrypted else ''}")
+            if refuse and job.encrypted:
+                reason, rc = refuse, 2
+                error = (f"{job.name}: the passphrase doesn't match this backup, nothing was uploaded" if reason == "wrong_passphrase" else
+                         f"{job.name}: could not check the passphrase against the existing backup, nothing was uploaded")
+                rl.line(label, "ERROR " + error.removeprefix(f"{job.name}: "))
+                results.append({"name": job.name, "rc": rc, "seconds": 0, "skipped": False})
+                event({"event": "job_end", "name": job.name, "rc": rc, "skipped": False, "files": 0, "error": error, "reason": reason})
+                continue
             empty = not has_files(src)
-            skipped = empty and os.path.isdir(src) and dest_empty(cfg, job, env)
+            dest = dest_state(cfg, job, env) if empty and os.path.isdir(src) else ""
+            skipped = dest == "empty"
             if skipped:
-                msg = f"{job.name}: skipped — folder is empty, nothing to back up yet"
-                log.write(msg + "\n")
-                if emit:
-                    emit(msg)
+                rl.line(label, "skipped, folder is empty, nothing to back up yet")
                 # an empty destination folder keeps restore working for this job
                 rc = 0 if dry_run else rclone(cfg, ["mkdir", job.dest], env=env)[0]
                 if rc:
-                    skipped = False
-                    msg = f"{job.name}: could not create the empty backup folder {job.dest} (rclone exit {rc})"
-                    log.write(msg + "\n")
-                    if emit:
-                        emit(msg)
+                    skipped, reason = False, "mkdir_failed"
+                    error = f"{job.name}: could not create the empty backup folder {job.dest} (rclone exit {rc})"
             elif empty:
-                msg = f"{job.name}: refusing to sync: source {src} is missing or empty (unmounted drive or typo?) — nothing was changed"
-                log.write(msg + "\n")
-                if emit:
-                    emit(msg)
+                reason = {"has_files": "empty_with_backup", "unreadable": "dest_unreadable"}.get(dest, "missing")
+                error = f"{job.name}: refusing to sync: source {src} is missing or empty (unmounted drive or typo?) — nothing was changed"
                 rc = 2
             else:
-                args = job_args(cfg, job, stamp) + COMMON + (["--dry-run"] if dry_run else [])
-                rc = stream(rclone_argv(cfg, args), env, log, emit)
+                args = job_args(cfg, job, stamp) + COMMON + JSON_LOG + (["--dry-run"] if dry_run else [])
+                tracker = Rclone()
+                rc = stream(rclone_argv(cfg, args), env, log, emit, rl.handler(label, tracker))
+                files, error = tracker.files, tracker.error
+                copied, copied_bytes = copied + files, copied_bytes + tracker.bytes
+                seconds = int(time.monotonic() - t0)
+                if rc:
+                    reason = "rclone"
+                    error = error or f"{job.name}: rclone exited with code {rc}"
+                    rl.line(label, f"ERROR rclone exited with code {rc}" if not tracker.error else "failed")
+                else:
+                    rl.line(label, f"done {plural(files, 'file')}, {human_size(tracker.bytes)}, {seconds} s" if files else
+                            f"dry run, would copy {plural(tracker.would, 'file')}, {human_size(tracker.would_bytes)}" if tracker.would else
+                            "done, already up to date")
+            if error and reason != "rclone":
+                rl.line(label, "ERROR " + error.removeprefix(f"{job.name}: "))
             results.append({"name": job.name, "rc": rc, "seconds": int(time.monotonic() - t0), "skipped": skipped})
-            line = f"{job.name} rc={rc}"
-            log.write(line + "\n")
-            if emit:
-                emit(line)
+            event({"event": "job_end", "name": job.name, "rc": rc, "skipped": skipped, "files": files, "error": error,
+                   "reason": reason})
         state = {"time": now_iso(), "dry_run": dry_run, "ok": all(r["rc"] == 0 for r in results), "jobs": results}
+        finishing = bool((cfg.manifest or cfg.probe) and not dry_run)
+        if finishing:
+            event({"event": "finishing_start"})
         if cfg.manifest and not dry_run:
             state["manifest"] = upload_manifest(cfg, state)
-            line = f"manifest rc={state['manifest']['rc']}"
-            log.write(line + "\n")
-            if emit:
-                emit(line)
+            rl.line("", "Lifeboat saved the list of backed-up folders" if state["manifest"]["ok"] else
+                    f"ERROR could not save the list of backed-up folders (rclone exit {state['manifest']['rc']})")
             state["ok"] = state["ok"] and state["manifest"]["ok"]
-        if cfg.probe and not dry_run:
-            state["probe"] = ensure_probe(cfg)
-            line = f"probe rc={state['probe']['rc']}"
-            log.write(line + "\n")
-            if emit:
-                emit(line)
+        if cfg.probe and not dry_run and not refuse and any(j.encrypted for j in cfg.jobs):  # an unchecked key never writes it
+            state["probe"] = probe or ensure_probe(cfg)
+            rl.line("", "Lifeboat passphrase check file is in place" if state["probe"]["ok"] else
+                    f"ERROR could not create the passphrase check file (rclone exit {state['probe']['rc']})")
             state["ok"] = state["ok"] and state["probe"]["ok"]
+        if finishing:
+            event({"event": "finishing_end", "ok": all(state[k]["ok"] for k in ("manifest", "probe") if k in state)})
+        failed = sum(r["rc"] != 0 for r in results)
+        if dry_run:
+            rl.line("", "Finished: dry run, nothing was changed")
+        elif state["ok"]:
+            rl.line("", f"Finished: backed up {plural(copied, 'file')} in {int(time.monotonic() - t_run)} s")
+        else:
+            rl.line("", "Finished with problems: " + (f"{plural(failed, 'folder')} not backed up" if failed else
+                                                      "the backup list or passphrase check could not be saved"))
     write_json("last-run.json", state)
     return state
 
@@ -319,7 +422,7 @@ def restore(cfg: Config, job: Job | str, to_dir: str | os.PathLike, version: str
     if version is not None and not STAMP_RE.match(version):
         raise ConfigError(f"version must look like 2026-01-31_130000, got {version!r}")
     src = job.dest if version is None else f"{job.old.rstrip('/')}/{version}/{job.name}"
-    args = ["copy", src, os.path.expanduser(str(to_dir))] + COMMON + (["--dry-run"] if dry_run else []) + (["--update"] if keep_newer else [])
+    args = ["copy", src, os.path.expanduser(str(to_dir))] + COMMON + JSON_LOG + (["--dry-run"] if dry_run else []) + (["--update"] if keep_newer else [])
     tmp = None
     if files:
         tmp = tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False)
@@ -329,7 +432,12 @@ def restore(cfg: Config, job: Job | str, to_dir: str | os.PathLike, version: str
     state_dir().mkdir(parents=True, exist_ok=True)
     try:
         with open(state_dir() / "restore.log", "w") as log:
-            return stream(rclone_argv(cfg, args), rclone_env(cfg), log, emit)
+            from lifeboat.app.wizard_state import job_label
+            rl, tracker, label = RunLog(log, emit), Rclone(), job_label(job.name)
+            rc = stream(rclone_argv(cfg, args), rclone_env(cfg), log, emit, rl.handler(label, tracker))
+            rl.line(label, ("restored " + plural(tracker.files, "file") + ", " + human_size(tracker.bytes)) if rc == 0
+                    else "ERROR restore failed" if tracker.error else f"ERROR rclone exited with code {rc}")
+            return rc
     finally:
         if tmp:
             os.unlink(tmp.name)

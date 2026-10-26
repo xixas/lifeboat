@@ -30,3 +30,6 @@ display (`gtk4-broadwayd`) and is skipped if that is missing.
 - Run the app against a throwaway setup without touching your real one: set `HOME`, the `XDG_*` dirs,
   `LIFEBOAT_DRIVE_ROOT=Lifeboat-test` and `LIFEBOAT_APP_ID=io.github.xixas.LifeboatE2E` (a separate GApplication
   instance; otherwise launching only raises an already-open Lifeboat window).
+- Before merging or releasing a UI change, render every changed page and dialog state to PNG at real size on a hidden
+  Broadway display (`LIFEBOAT_SNAP=DIR`, see `docs/usage.md`) and look at each one; review the PNGs with the diff.
+  Diff-only reviews missed every visual problem found in the 0.4.0 end-to-end run.

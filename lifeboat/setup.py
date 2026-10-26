@@ -49,6 +49,19 @@ def client_secret() -> str:
     return _reveal(_CLIENT_SECRET_OBSCURED)
 
 
+SIGNIN_PAGE = Path(__file__).with_name("signin_page.html")
+
+
+@functools.cache
+def rclone_supports_template() -> bool:
+    """Older rclone has no `authorize --template`; passing it would fail the sign-in, so ask once."""
+    try:
+        r = subprocess.run(["rclone", "authorize", "--help"], capture_output=True, text=True, errors="replace", timeout=10)
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return "--template" in r.stdout + r.stderr
+
+
 def _reveal(obscured: str) -> str:
     try:
         p = subprocess.run(["rclone", "reveal", obscured], capture_output=True, text=True, timeout=30)
@@ -133,7 +146,10 @@ class SignIn:
         env = dict(os.environ, RCLONE_DRIVE_SCOPE="drive.file", RCLONE_DRIVE_CLIENT_ID=client_id(),
                    RCLONE_DRIVE_CLIENT_SECRET=client_secret())
         try:
-            self._proc = subprocess.Popen(["rclone", "authorize", "drive", "--auth-no-open-browser", "--config", os.devnull],
+            cmd = ["rclone", "authorize", "drive", "--auth-no-open-browser", "--config", os.devnull]
+            if rclone_supports_template():
+                cmd += ["--template", str(SIGNIN_PAGE)]  # the branded page the browser shows after Google sign-in
+            self._proc = subprocess.Popen(cmd,
                                           env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                           text=True, errors="replace", start_new_session=True)
         except OSError as e:

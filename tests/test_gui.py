@@ -1,5 +1,6 @@
 """GTK smoke test. Runs in a child process against a hidden Broadway display, never the real one."""
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -9,6 +10,8 @@ from pathlib import Path
 import pytest
 
 pytest.importorskip("gi")
+
+BROADWAY = os.environ.get("LIFEBOAT_TEST_BROADWAY", ":9")  # a different display per parallel run
 
 SCRIPT = '''
 import sys
@@ -49,10 +52,10 @@ def test_main_window_builds_with_and_without_config(env, make_cfg):
     j = cfg.jobs[0]
     text = (f'[[jobs]]\nname = "docs"\nsource = "{j.source}"\ndest = "{j.dest}"\nold = "{j.old}"\n'
             '[modules]\nclaude_skills = "off"\n')
-    bw = subprocess.Popen(["gtk4-broadwayd", ":9"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    bw = subprocess.Popen(["gtk4-broadwayd", BROADWAY], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     try:
         time.sleep(1)
-        e = dict(os.environ, GDK_BACKEND="broadway", BROADWAY_DISPLAY=":9",
+        e = dict(os.environ, GDK_BACKEND="broadway", BROADWAY_DISPLAY=BROADWAY,
                  PYTHONPATH=str(Path(__file__).parent.parent))
         e.pop("WAYLAND_DISPLAY", None)
         p = subprocess.run([sys.executable, "-c", SCRIPT, str(cfg.path), text], env=e, capture_output=True, text=True,
@@ -65,6 +68,7 @@ def test_main_window_builds_with_and_without_config(env, make_cfg):
 
 
 PRELUDE = r'''
+import json
 import os
 import sys
 import time
@@ -79,12 +83,18 @@ from gi.repository import Adw, Gdk, GLib, Graphene, Gsk, Gtk
 if not Gtk.init_check():
     sys.exit(77)
 Adw.init()
+Gtk.Settings.get_default().props.gtk_font_name = "Sans 13"  # a wider font than the default, so a page that only just fits is caught
 from datetime import datetime, timezone
 from pathlib import Path
 from lifeboat import setup, timer
 from lifeboat.app import flow, wizard
 from lifeboat.app.window import Win, gather
 
+_push = flow.AccountDialog.push
+def push_and_lay_out(self, page):  # the width warning fires on allocation, so give every page a frame
+    _push(self, page)
+    pump(timeout=0.25)
+flow.AccountDialog.push = push_and_lay_out
 SHOTS = os.environ.get("LIFEBOAT_SHOTS")
 if SHOTS:
     Adw.StyleManager.get_default().set_color_scheme(Adw.ColorScheme.FORCE_LIGHT)
@@ -222,6 +232,8 @@ setup.check_passphrase = lambda conf, pw, device: calls.append(("check", pw, dev
 
 win = Win(None)
 win.run_cli = lambda *a: calls.append(("run_cli",) + a)
+ran_first = []
+win.run_backup = lambda **kw: (calls.append(("run_backup",)), ran_first.append(kw.get("first")))
 win.refresh = lambda: calls.append(("refresh",))
 win.open_restore_wizard = lambda device=None, handover=None: calls.append(("restore", device))
 win.present()
@@ -294,7 +306,8 @@ stored.set_active(True)
 assert wiz.kit_go.get_sensitive()
 wiz.kit_go.emit("clicked")
 assert not wiz.get_can_close()
-assert pump(lambda: ("run_cli", "Back up now", "run") in calls), calls
+assert pump(lambda: ("run_backup",) in calls), calls
+assert ran_first == [True], ran_first  # the wizard's backup is the "First Backup" one
 assert ("make_remotes", TOKEN, pw) in calls
 cfgc = [c for c in calls if c[0] == "config"][0]
 assert cfgc[1] == "my-laptop" and cfgc[3] == "09:00" and cfgc[4] == []
@@ -303,7 +316,7 @@ assert str(HOME / "Extra") in chosen and str(HOME / ".ssh") in chosen, chosen
 assert [c for c in cfgc[2] if c["path"] == str(HOME / ".ssh")][0]["secret"] is True
 assert ("timer",) in calls
 order = [c[0] for c in calls]
-assert order.index("make_remotes") < order.index("config") < order.index("timer") < order.index("run_cli")
+assert order.index("make_remotes") < order.index("config") < order.index("timer") < order.index("run_backup")
 pump(timeout=0.3)
 assert wiz.token is None and wiz.passphrase is None  # dropped on close
 
@@ -327,7 +340,7 @@ wiz.force_close()
 pump(timeout=0.2)
 
 # ---- scenario 3: account already has a backup, add this laptop
-setup.find_backups = lambda conf: [{"device": setup.default_device_name(), "time": datetime.now(timezone.utc).isoformat(),
+setup.find_backups = lambda conf: [{"device": setup.default_device_name(), "host": "some-other-box", "time": datetime.now(timezone.utc).isoformat(),
                                     "jobs": [{"name": "a"}, {"name": "b"}]}]
 setup.new_passphrase = lambda: (_ for _ in ()).throw(AssertionError("must not mint a second passphrase"))
 wiz = start()
@@ -361,7 +374,7 @@ assert wiz.pw_row.has_css_class("error") and tag() == "passphrase"
 shot("07b-passphrase-wrong")
 wiz.pw_row.set_text("right-pass")
 click(vis(), "Check")
-assert pump(lambda: ("run_cli", "Back up now", "run") in calls), calls
+assert pump(lambda: ("run_backup",) in calls), calls
 assert ("make_remotes", TOKEN, "right-pass") in calls
 cfgc = [c for c in calls if c[0] == "config"][0]
 assert cfgc[1] == "second" and cfgc[4] == [setup.default_device_name()]
@@ -426,7 +439,7 @@ assert pump(lambda: tag() == "setting-up" and wiz.get_can_close()), "dialog stuc
 txt = " ".join(labels(vis()))
 assert "Almost Done" in txt and "daily timer is not" in txt, txt
 assert "systemd isn't available" in txt and "No such file" not in txt, txt
-assert not any(c[0] == "run_cli" for c in calls)
+assert not any(c[0] == "run_backup" for c in calls)
 shot("09-timer-failed")
 calls.clear()
 click(vis(), "Close")
@@ -515,6 +528,33 @@ assert not wiz.group_folders.get_visible()
 wiz.force_close()
 pump(timeout=0.3)
 setup.suggest_folders = real_suggest
+
+# this laptop's own backup is recognised: pre-picked, labelled, and Restore becomes the recommended action
+import socket
+setup.find_backups = lambda conf: [
+    {"device": "other", "host": "elsewhere", "time": datetime.now(timezone.utc).isoformat(), "jobs": [{"name": "a"}]},
+    {"device": "old-name", "host": socket.gethostname(), "time": datetime.now(timezone.utc).isoformat(), "jobs": [{"name": "a"}]}]
+start()
+click(vis(), "Continue")
+click(vis(), "Sign In With Google")
+assert pump(lambda: tag() == "existing")
+subs = {w.get_title(): w.get_subtitle() for w in walk(vis()) if isinstance(w, Adw.ActionRow)}
+assert subs["old-name"].startswith("Looks like this laptop · Last backup") and "Looks like" not in subs["other"], subs
+assert wiz.picked == "old-name"
+bar = [b for b in buttons(vis()) if b.get_label() in ("Add This Laptop", "Restore From old-name")]
+assert [b.get_label() for b in bar] == ["Add This Laptop", "Restore From old-name"] and bar[1].has_css_class("suggested-action"), bar
+shot("06c-existing-same-laptop")
+click(vis(), "Add This Laptop")
+wiz.name_row.set_text("old-name")
+assert wiz.name_err.get_label().endswith("go back and restore from it."), wiz.name_err.get_label()
+sw = next(w for w in walk(vis()) if isinstance(w, Gtk.ScrolledWindow))
+pump(timeout=0.5)
+adj = sw.get_vadjustment()
+adj.set_value(adj.get_upper())  # the message sits under the fold
+pump(timeout=0.5)
+shot("06d-name-clash")
+wiz.force_close()
+pump(timeout=0.3)
 
 # one existing device still looks like a single choice (radio), with the suggested action last
 setup.find_backups = lambda conf: [{"device": "solo", "time": datetime.now(timezone.utc).isoformat(), "jobs": [{"name": "a"}]}]
@@ -950,10 +990,35 @@ wiz.pw_row.set_text("right-pass")
 click(vis(), "Check")
 assert pump(lambda: tag() == "what")
 assert ("check", "right-pass", "work-laptop") in calls
+assert wiz.keep_row.get_active() is False  # another laptop's backup from 2 h ago: probably still in use
 # closing before restoring removes the conf this run created
 wiz.force_close()
 pump(timeout=0.4)
 assert not CONF.exists(), "token left behind after bailing out"
+
+# ---- this laptop's own backup (a reinstall): continue it, even though it ran 2 h ago
+import socket
+found[:] = [OLD, dict(manifest("this-laptop", 2), host=socket.gethostname())]
+inst.clear()
+sw = wizard.SetupWizard(win)
+sw.present(win)
+pump(timeout=0.3)
+wiz = sw
+click(vis(), "Continue")
+click(vis(), "Sign In With Google")
+assert pump(lambda: tag() == "existing"), tag()
+click(vis(), "Restore From this-laptop")
+assert pump(lambda: inst, 3)
+wiz = inst[0]
+pump(timeout=0.4)
+wiz.pw_row.set_text("right-pass")
+click(vis(), "Check")
+assert pump(lambda: tag() == "what")
+assert wiz.keep_row.get_active() is True and not wiz.name_row.get_visible()  # keeps backing up as this-laptop
+shot("r17-same-laptop-keeps-backing-up")
+wiz.force_close()
+pump(timeout=0.4)
+CONF.unlink(missing_ok=True)
 
 # a conf that was already there is never deleted
 CONF.write_text("[mine]\n")
@@ -977,8 +1042,206 @@ assert not CONF.exists()
 print("RESTORE OK")
 '''
 
+PROGRESS_BODY = r'''
+from gi.repository import Gio
+from lifeboat.app import progress
+
+progress.FileDialog = FakeFileDialog
+win.toast = lambda t: calls.append(("toast", t))
+win.refresh = lambda: calls.append(("refresh",))
+bp = progress.BackupProgress(win, ["true"], {}, ["documents", "photos", "ssh-keys", "empty"])
+wiz = bp.dlg  # shot() default target is wiz.get_child(); nothing is spawned, the test feeds the lines
+win.set_busy(True)
+bp.dlg.present(win)
+bp.dlg.set_can_close(False)
+rows = lambda: {s.title: s for s in [*bp.steps.values(), bp.finishing]}
+ev = lambda **kw: bp.on_event(json.dumps(kw))
+assert [s.state for s in rows().values()] == ["waiting"] * 5
+shot("progress-0-waiting")
+
+ev(event="job_start", name="documents")
+assert bp.wt.get_subtitle() == "0 of 4 done"
+for ln in ("Lifeboat 0.4.0 · backup of geass-rog · Thu 23 Oct 2026 19:20:52",
+           "19:20:52  Documents  ~/Documents → Google Drive: Lifeboat/geass-rog/Documents",
+           "19:20:54  Documents  copied hello.txt (new, 46 B)", "19:20:57  Documents  done 1 file, 46 B, 5 s",
+           "19:20:57  Photos  ~/Photos → Google Drive: Lifeboat/geass-rog/Photos"):
+    bp.on_log(ln)
+assert rows()["Documents"].state == "running" and not bp.dlg.get_can_close()
+shot("progress-1-running")
+ev(event="job_end", name="documents", rc=0, skipped=False, files=2, error="")
+ev(event="job_start", name="photos")
+bp.on_log("19:20:58  Photos  ERROR refusing to sync: source /run/media/v/Photos is missing or empty (unmounted drive or typo?) — nothing was changed")
+ev(event="job_end", name="photos", rc=2, skipped=False, files=0, reason="empty_with_backup",
+   error="photos: refusing to sync: source /x is missing or empty - nothing was changed")
+ev(event="job_start", name="ssh-keys")
+ev(event="job_end", name="ssh-keys", rc=0, skipped=False, files=0, error="")
+ev(event="job_start", name="empty")
+ev(event="job_end", name="empty", rc=0, skipped=True, files=0, error="")
+ev(event="finishing_start")
+ev(event="finishing_end", ok=True)
+r = rows()
+assert [r[n].state for n in ("Documents", "Photos", "SSH keys", "Empty", "Finishing up")] == ["ok", "error", "ok", "skip", "ok"]
+assert r["Documents"].row.get_subtitle() == "Copied 2 files"
+assert r["SSH keys"].row.get_subtitle() == "Already up to date"
+assert r["Empty"].row.get_subtitle() == "Nothing to back up yet"
+assert r["Empty"].slot.get_first_child().has_css_class("dim-label")  # neutral, not the yellow of a warning
+assert isinstance(r["Photos"].row, Adw.ExpanderRow) and r["Photos"].row.get_expanded()
+assert "Is the drive plugged in" in r["Photos"].row.get_subtitle()
+assert bp.list.get_row_at_index(1) is r["Photos"].row  # swapped in place, order kept
+ev(event="done", ok=False)
+assert not bp.finished and not bp.retry.get_visible()  # the child may still be running
+bp._ended()
+assert bp.summary.get_label() == "1 folder not backed up", bp.summary.get_label()
+assert bp.summary_sub.get_label() == "The others are safe on Google Drive"
+assert bp.retry.get_visible() and bp.close_btn.get_visible() and not bp.done_btn.get_visible() and bp.dlg.get_can_close()
+assert bp.finishing.row.get_parent() is None  # housekeeping shows only when it fails
+assert bp.wt.get_subtitle() == "Finished with problems"
+assert "Try Again" in [b.get_label() for b in buttons(bp.dlg.get_child())] and bp.retry.is_ancestor(bp.dlg) and bp.retry.get_visible()
+shot("progress-2-failed")
+
+for reason, want in (("missing", "doesn't exist any more"), ("dest_unreadable", "Check your connection"),
+                     ("mkdir_failed", "create its folder"), ("rclone", "ERROR : boom"),
+                     ("wrong_passphrase", "passphrase doesn't match")):
+    st = progress.Step("Documents (encrypted)")
+    bp.list.append(st.row)
+    bp._job_end(st, {"rc": 2, "error": "ERROR : boom", "reason": reason})
+    assert want in st.row.get_subtitle(), (reason, st.row.get_subtitle())
+    if reason == "wrong_passphrase":
+        bp.list.remove(st.row)
+        bp.list.insert(st.row, 0)  # on top, in view for the picture
+        shot("progress-4-wrong-passphrase")
+    bp.list.remove(st.row)
+
+# the Log toggle swaps pages, "Show in Log" lands on the failed job's lines
+assert bp.stack.get_visible_child_name() == "progress"
+click(bp.dlg.get_child(), "Show in Log")
+assert bp.stack.get_visible_child_name() == "log" and bp.log_btn.get_active() and not bp.progress_btn.get_active()
+assert "copied hello.txt (new, 46 B)" in bp.buf.get_text(bp.buf.get_start_iter(), bp.buf.get_end_iter(), False)
+pump(timeout=1.5)  # let the toggle buttons finish their CSS transition before the snapshot
+shot("progress-3-log")
+# lines that are not events never raise (the dialog cannot be closed while it runs)
+for bad in ("{not json", "5", "[1]", json.dumps({"event": "job_start"}), json.dumps({"event": "job_end", "rc": 1}),
+            json.dumps({"event": "nonsense"})):
+    bp.on_event(bad)
+assert rows()["Photos"].state == "error"
+
+bp.progress_btn.set_active(True)
+assert bp.stack.get_visible_child_name() == "progress" and not bp.log_btn.get_active()
+bp.log_btn.set_active(True)
+
+click(bp.dlg.get_child(), "Copy Error")
+assert ("toast", "Copied") in calls
+saved = HOME / "kit.pdf"
+click(bp.dlg.get_child(), "Save Log…")
+assert "copied hello.txt (new, 46 B)" in saved.read_text() and ("toast", "Log saved") in calls
+
+# Try Again resets the same dialog
+bp._reset()  # Try Again, with the Log showing, goes back to Progress
+assert bp.stack.get_visible_child_name() == "progress" and bp.progress_btn.get_active() and not bp.log_btn.get_active()
+assert [s.state for s in rows().values()] == ["waiting"] * 5 and not bp.retry.get_visible() and not bp.head.get_visible()
+
+# a clean run
+TIMER = {"lifeboat": {"installed": True, "next": "2026-10-24T13:00:00+05:30", "last": None}}
+progress.engine.timers = lambda: TIMER
+ev(event="job_start", name="documents")
+for n in ("documents", "photos", "ssh-keys", "empty"):
+    ev(event="job_end", name=n, rc=0, skipped=False, files=1, error="")
+ev(event="done", ok=True)
+bp._ended()
+assert bp.wt.get_subtitle() == "Finished" and bp.summary.get_label() == "Backed Up" and bp.summary_sub.get_label() == "4 files copied"
+assert pump(lambda: "Next backup Sat 24 Oct, 13:00" in bp.summary_sub.get_label()), bp.summary_sub.get_label()  # the timer's own time
+assert bp.summary_sub.get_label().startswith("4 files copied · ")
+assert bp.done_btn.get_visible() and not bp.retry.get_visible() and not bp.close_btn.get_visible()
+assert bp.list.get_row_at_index(4) is None and bp.finishing.row.get_parent() is None  # no finishing row on success
+assert bp.progress_btn.get_active() and not bp.log_btn.get_active() and bp.stack.get_visible_child_name() == "progress"
+pump(timeout=1.5)  # let the toggle finish its CSS transition before the snapshot
+shot("progress-4-done")
+
+# no timer installed: say so, never invent a time
+TIMER["lifeboat"].update(installed=False, next=None)
+bp._reset()
+ev(event="job_start", name="documents")
+for n in ("documents", "photos", "ssh-keys", "empty"):
+    ev(event="job_end", name=n, rc=0, skipped=False, files=0, error="")
+ev(event="done", ok=True)
+bp._ended()
+assert pump(lambda: "No daily backup scheduled" in bp.summary_sub.get_label()), bp.summary_sub.get_label()
+
+# Done closes the dialog
+closed = []
+bp.dlg.connect("closed", lambda *_: closed.append(1))
+click(bp.dlg.get_child(), "Done")
+assert pump(lambda: closed)
+
+# Finishing up appears only when it fails
+bp._reset()
+ev(event="finishing_start")
+ev(event="finishing_end", ok=False)
+assert bp.finishing.state == "error" and bp.finishing.row.get_parent() is not None
+
+# the wizard's run: "First Backup", "You're All Set", the daily time and the recovery kit reminder
+TIMER["lifeboat"].update(installed=True, next="2026-10-24T13:00:00+05:30")
+fb = progress.BackupProgress(win, ["true"], {}, ["documents", "ssh-keys"], first=True, daily_at="13:00", kit=True)
+assert fb.wt.get_title() == "First Backup" and fb.dlg.get_title() == "First Backup"
+win.set_busy(True)
+fb.on_event(json.dumps({"event": "job_start", "name": "documents"}))
+fb.on_event(json.dumps({"event": "job_end", "name": "documents", "rc": 0, "files": 2}))
+fb.on_event(json.dumps({"event": "job_start", "name": "ssh-keys"}))
+fb.on_event(json.dumps({"event": "job_end", "name": "ssh-keys", "rc": 0, "files": 1}))
+fb.on_event(json.dumps({"event": "done", "ok": True}))
+fb._ended()
+assert fb.summary.get_label() == "You're All Set" and fb.kit_note.get_visible()
+assert pump(lambda: "every day at 13:00 by itself. You don't need to keep it open." in fb.summary_sub.get_label()), fb.summary_sub.get_label()
+assert fb.summary_sub.get_label().startswith("3 files are safe on Google Drive.")
+wiz = fb.dlg
+fb.dlg.present(win)
+shot("progress-5-first-backup")
+wiz = bp.dlg
+
+# Try Again via its button: spawns again, and a callback of the old run cannot touch the new one
+spawned = []
+def fake_spawn():
+    spawned.append(1)
+    return Gio.Subprocess.new(["sh", "-c", 'echo hello >&2; echo "$1"', "sh", json.dumps({"event": "done", "ok": True})],
+                              Gio.SubprocessFlags.STDOUT_PIPE | Gio.SubprocessFlags.STDERR_PIPE)
+bp._spawn = fake_spawn
+bp._reset()
+win.set_busy(False)
+ev(event="job_start", name="documents")
+bp.verdict = False
+bp._ended()
+assert bp.retry.get_visible()
+old_gen = bp.gen
+click(bp.dlg.get_child(), "Try Again")
+assert spawned == [1] and bp.gen == old_gen + 1 and not bp.finished
+bp._ended(old_gen)  # the previous run's late eof
+assert not bp.finished and win.busy
+assert pump(lambda: bp.finished), "the new run never finished"
+assert bp.summary.get_label() == "Backed Up" and "hello" in bp.buf.get_text(bp.buf.get_start_iter(), bp.buf.get_end_iter(), False)
+
+# no manifest or passphrase check configured: no "Finishing up" row, and a failed run is still described truthfully
+bp2 = progress.BackupProgress(win, ["true"], {}, ["documents"])
+assert bp2.list.get_row_at_index(1) is None and bp2.wt.get_subtitle() == "0 of 1 done"
+win.set_busy(True)
+bp2.on_event(json.dumps({"event": "job_start", "name": "documents"}))
+bp2.on_event(json.dumps({"event": "job_end", "name": "documents", "rc": 0, "files": 1}))
+bp2.on_event(json.dumps({"event": "done", "ok": False}))  # e.g. the settings command failed
+bp2._ended()
+assert bp2.summary.get_label() == "Some steps didn't finish" and bp2.retry.get_visible()
+assert bp2.list.get_row_at_index(1) is None
+
+# a stream that ends without a verdict marks what was running as failed
+bp._reset()
+win.set_busy(True)
+ev(event="job_start", name="documents")
+bp._ended()
+assert rows()["Documents"].state == "error" and bp.summary.get_label() == "Backup didn't finish"
+print("PROGRESS OK")
+'''
+
 WIZARD_SCRIPT = PRELUDE + SETUP_BODY
 RESTORE_SCRIPT = PRELUDE + RESTORE_BODY
+PROGRESS_SCRIPT = PRELUDE + PROGRESS_BODY
 
 
 def run_broadway(env, script, expect):
@@ -988,10 +1251,10 @@ def run_broadway(env, script, expect):
     for d in ("Documents", "Pictures", ".ssh", "Extra"):
         (home / d).mkdir(parents=True)
         (home / d / "f.txt").write_text("x")
-    bw = subprocess.Popen(["gtk4-broadwayd", ":9"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    bw = subprocess.Popen(["gtk4-broadwayd", BROADWAY], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     try:
         time.sleep(1)
-        e = dict(os.environ, GDK_BACKEND="broadway", BROADWAY_DISPLAY=":9", HOME=str(home),
+        e = dict(os.environ, GDK_BACKEND="broadway", BROADWAY_DISPLAY=BROADWAY, HOME=str(home),
                  XDG_CONFIG_HOME=str(env / "config"), XDG_STATE_HOME=str(env / "state"),
                  PYTHONPATH=str(Path(__file__).parent.parent))
         e.pop("WAYLAND_DISPLAY", None)
@@ -1005,6 +1268,7 @@ def run_broadway(env, script, expect):
     assert p.returncode == 0, p.stdout + p.stderr
     assert expect in p.stdout
     assert "Traceback" not in p.stderr and "g_value" not in p.stderr, p.stderr
+    assert not re.search(r"requested \d+ px, \d+ px available", p.stderr), p.stderr  # a page too wide for its dialog
     print(p.stderr)  # errors inside signal handlers do not fail the script
 
 
@@ -1014,3 +1278,7 @@ def test_setup_wizard_walkthrough(env):
 
 def test_restore_wizard_walkthrough(env):
     run_broadway(env, RESTORE_SCRIPT, "RESTORE OK")
+
+
+def test_backup_checklist_dialog_follows_events(env):
+    run_broadway(env, PROGRESS_SCRIPT, "PROGRESS OK")

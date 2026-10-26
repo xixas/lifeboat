@@ -1,3 +1,4 @@
+import socket
 from datetime import date
 from pathlib import Path
 
@@ -16,6 +17,7 @@ from lifeboat.app.wizard_state import (  # noqa: E402
     daily_times,
     fmt_size,
     folders_text,
+    same_laptop_backup,
     tilde,
     validate_device_name,
 )
@@ -62,28 +64,40 @@ class SetupWizard(AccountDialog):
         g = Adw.PreferencesGroup(title="Backups on This Account",
                                  description="This Google account already has backups. Restore one, or add this laptop next to them.")
         leader = Gtk.CheckButton(visible=False)  # a group needs a second member to look like radio buttons, even for one device
-        self.picked = names[0]
-        for i, m in enumerate(self.existing):
+        self.same = same_laptop_backup(self.existing, socket.gethostname(), setup.default_device_name())
+        self.picked = self.same or names[0]
+        for m in self.existing:
             n = len(m.get("jobs", []))
-            r = Adw.ActionRow(title=m["device"], subtitle=f"Last backup {ago(m.get('time'))} · {folders_text(n)}")
+            sub = f"Last backup {ago(m.get('time'))} · {folders_text(n)}"
+            r = Adw.ActionRow(title=m["device"], subtitle=f"Looks like this laptop · {sub}" if m["device"] == self.same else sub)
             c = Gtk.CheckButton(valign=Gtk.Align.CENTER)
             c.set_group(leader)
-            c.set_active(i == 0)
-            c.connect("toggled", lambda b, d=m["device"]: b.get_active() and setattr(self, "picked", d))
+            c.set_active(m["device"] == self.picked)
+            c.connect("toggled", lambda b, d=m["device"]: b.get_active() and self._pick(d))
             r.add_prefix(c)
             r.set_activatable_widget(c)
             g.add(r)
         pg.add(g)
-        bottom = self._bar(pill("Restore From This Backup", self._restore_picked, suggested=False),
-                           pill("Add This Laptop", self._add_laptop))
+        if self.same:  # recommend restoring: that button goes last and suggested
+            self.restore_btn = pill(f"Restore From {self.picked}", self._restore_picked)
+            bottom = self._bar(pill("Add This Laptop", self._add_laptop, suggested=False), self.restore_btn)
+        else:
+            self.restore_btn = pill("Restore From This Backup", self._restore_picked, suggested=False)
+            bottom = self._bar(self.restore_btn, pill("Add This Laptop", self._add_laptop))
         return self._page("existing", "Existing Backups", pg, bottom=bottom)
+
+    def _pick(self, device):
+        self.picked = device
+        if self.same:
+            self.restore_btn.set_label(f"Restore From {device}")
 
     def _add_laptop(self):
         self.push(self._folders_page())
 
     def _restore_picked(self):
         """Hand the signed-in account over, so the restore wizard does not ask to sign in again."""
-        handover = {"token": self.token, "existing": self.existing, "conf_made_here": self._conf_made_here}
+        handover = {"token": self.token, "existing": self.existing, "conf_made_here": self._conf_made_here,
+                    "same_laptop": self.same}  # a reinstall carries on with its own backup
         self._conf_made_here = False  # the restore wizard owns the conf now: closing this one must not delete it
         self.force_close()
         self.win.open_restore_wizard(self.picked, handover)
@@ -335,7 +349,7 @@ class SetupWizard(AccountDialog):
             return
         self.force_close()
         self.win.refresh()
-        self.win.run_cli("Back up now", "run")
+        self.win.run_backup(first=True)
 
     def _setup_failed(self, err):
         self._error_page(self.setup_page, "Setup Failed", err, lambda: self.nav.pop())

@@ -23,7 +23,23 @@ def validate_device_name(name: str, existing: list[str]) -> str | None:
     if not NAME_RE.match(name):
         return "Use letters, digits, '.', '_' and '-', starting with a letter or digit."
     if name in existing:
-        return "Another laptop on this account already uses this name."
+        return "Another laptop on this account already uses this name. If this is that laptop, go back and restore from it."
+    return None
+
+
+# hostnames a fresh install ships with: shared by unrelated laptops, so never evidence of "this laptop"
+GENERIC_HOSTS = {"localhost", "fedora", "nobara", "ubuntu", "debian", "archlinux", "pop-os",
+                 "linuxmint", "manjaro", "opensuse", "endeavouros", "bazzite", "steamdeck", "linux"}
+
+
+def same_laptop_backup(existing: list[dict], hostname: str, default_name: str) -> str | None:
+    """The device name of the backup that looks like this laptop, or None. The manifest's recorded host is the evidence;
+    the device name only counts for manifests without a host, since a name alone is easily shared ('laptop')."""
+    if hostname.partition(".")[0].lower() in GENERIC_HOSTS:
+        return None
+    for m in existing:
+        if m.get("host") == hostname or (not m.get("host") and m["device"] == default_name):
+            return m["device"]
     return None
 
 
@@ -36,13 +52,15 @@ def job_label(name: str) -> str:
     return text[:1].upper() + text[1:]
 
 
-def keep_backing_up_default(manifest: dict, now: datetime) -> bool:
+def keep_backing_up_default(manifest: dict, now: datetime, same_laptop: bool = False) -> bool:
     """Continue the old device's backups by default only when its last run is over 24 h old (or unreadable): a laptop
-    that backed up today is probably still in use, and two laptops must not share one backup folder."""
+    that backed up today is probably still in use, and two laptops must not share one backup folder. A backup that
+    looks like this laptop's own (a reinstall) is continued unless it ran within the hour: a reinstall cannot have,
+    a cloned disk still running can."""
     t = parse_time(manifest.get("time"))
     if t is not None and t.tzinfo is None:
         now = now.replace(tzinfo=None)
-    return t is None or (now - t).total_seconds() > 24 * 3600
+    return t is None or (now - t).total_seconds() > (3600 if same_laptop else 24 * 3600)
 
 
 def since_text(iso) -> str:

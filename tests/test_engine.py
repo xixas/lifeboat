@@ -1,7 +1,9 @@
 import json
 import os
+import re
 import subprocess
 import time
+from dataclasses import replace
 from datetime import datetime
 
 import pytest
@@ -270,7 +272,7 @@ def test_empty_source_with_missing_dest_is_skipped_ok(tmp_path, make_cfg, clock)
     st = engine.run_backup(cfg, now=clock())
     assert st["ok"] and st["jobs"][0]["rc"] == 0 and st["jobs"][0]["skipped"] is True
     log = read(engine.state_dir() / "run.log")
-    assert "docs: skipped — folder is empty, nothing to back up yet" in log and "docs rc=0" in log
+    assert "Docs  skipped, folder is empty, nothing to back up yet" in log and "rc=" not in log
 
 
 def test_a_skipped_job_restores_cleanly_and_skips_again(tmp_path, make_cfg, clock):
@@ -370,7 +372,7 @@ def test_manifest_failure_keeps_job_rc_but_fails_the_run_and_is_a_problem(tmp_pa
     st = engine.run_backup(cfg, now=clock())
     assert st["jobs"][0]["rc"] == 0 and st["ok"] is False
     assert st["manifest"]["ok"] is False and st["manifest"]["rc"] != 0
-    assert "manifest rc=" in (engine.state_dir() / "run.log").read_text()
+    assert "ERROR could not save the list of backed-up folders" in (engine.state_dir() / "run.log").read_text()
     s = engine.status(cfg)
     assert s["manifest"] == st["manifest"]
     assert any("new laptop" in p["body"] for p in engine.problems(cfg, s))
@@ -378,6 +380,7 @@ def test_manifest_failure_keeps_job_rc_but_fails_the_run_and_is_a_problem(tmp_pa
 
 def test_probe_is_written_once_into_the_crypt_remote(tmp_path, make_cfg, clock):
     cfg = make_cfg(device=device(tmp_path, probe=True))
+    cfg.jobs[0] = replace(cfg.jobs[0], encrypted=True)  # the probe exists only for a config with encrypted jobs
     (tmp_path / "src" / "a.txt").write_text("one")
     st = engine.run_backup(cfg, now=clock(0))
     assert st["probe"] == {"ok": True, "rc": 0} and st["ok"]
@@ -392,6 +395,7 @@ def test_probe_is_written_once_into_the_crypt_remote(tmp_path, make_cfg, clock):
 
 def test_check_probe_true_with_right_password_false_with_wrong(tmp_path, make_cfg, clock, monkeypatch):
     cfg = make_cfg(device=device(tmp_path, probe=True))
+    cfg.jobs[0] = replace(cfg.jobs[0], encrypted=True)  # the probe exists only for a config with encrypted jobs
     (tmp_path / "src" / "a.txt").write_text("one")
     engine.run_backup(cfg, now=clock())
     bad = subprocess.run(["rclone", "obscure", "wrong-password"], capture_output=True, text=True, check=True).stdout.strip()
@@ -465,3 +469,285 @@ def test_no_retired_key_without_retired_jobs_and_an_unreadable_manifest_is_not_o
     assert "retired" not in json.loads((tmp_path / "drive" / "thinkpad" / "manifest.json").read_text())
     bad = make_cfg(device=device(tmp_path, manifest="nosuchremote:thinkpad/manifest.json"))
     assert engine.upload_manifest(bad, {"time": "t", "ok": True})["ok"] is False
+
+
+def test_run_backup_reports_job_events_with_file_counts(tmp_path, make_cfg, clock):
+    cfg = make_cfg()
+    (tmp_path / "src" / "a.txt").write_text("one")
+    (tmp_path / "src" / "b.txt").write_text("two")
+    events = []
+    engine.run_backup(cfg, now=clock(), on_event=events.append)
+    assert events[0] == {"event": "job_start", "name": "docs"}
+    assert events[1] == {"event": "job_end", "name": "docs", "rc": 0, "skipped": False, "files": 2, "error": "", "reason": ""}
+    events.clear()
+    engine.run_backup(cfg, now=clock(5), on_event=events.append)
+    assert events[1]["files"] == 0
+
+
+def test_job_end_carries_skip_and_error_text(tmp_path, make_cfg, clock, monkeypatch):
+    cfg = make_cfg()
+    events = []
+    engine.run_backup(cfg, now=clock(), on_event=events.append)
+    assert events[1]["skipped"] is True and events[1]["files"] == 0 and events[1]["error"] == ""
+    events.clear()
+    (tmp_path / "src").rmdir()
+    engine.run_backup(cfg, now=clock(5), on_event=events.append)
+    assert events[1]["rc"] == 2 and "refusing to sync" in events[1]["error"]
+    events.clear()
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "a.txt").write_text("one")
+
+    def broken(argv, env, log, emit=None, handle=None):
+        handle(json.dumps({"level": "error", "msg": "Failed to copy: boom", "object": "a.txt", "objectType": "*local.Object"}))
+        return 1
+    monkeypatch.setattr(engine, "stream", broken)
+    engine.run_backup(cfg, now=clock(9), on_event=events.append)
+    assert events[1]["rc"] == 1 and events[1]["error"] == "a.txt: Failed to copy: boom"
+
+
+def test_manifest_and_probe_are_one_finishing_step(tmp_path, make_cfg, clock):
+    cfg = make_cfg(crypt=True, device=device(tmp_path, probe=True))
+    (tmp_path / "src" / "a.txt").write_text("one")
+    events = []
+    engine.run_backup(cfg, now=clock(), on_event=events.append)
+    assert [e["event"] for e in events] == ["job_start", "job_end", "finishing_start", "finishing_end"]
+    assert events[3]["ok"] is True
+    events.clear()
+    engine.run_backup(cfg, dry_run=True, now=clock(5), on_event=events.append)
+    assert [e["event"] for e in events] == ["job_start", "job_end"]
+
+
+def _reason(cfg, clock, **kw):
+    events = []
+    engine.run_backup(cfg, now=clock(), on_event=events.append, **kw)
+    return events[1]["reason"]
+
+
+def test_job_end_reason_missing_folder(tmp_path, make_cfg, clock):
+    cfg = make_cfg()
+    (tmp_path / "src").rmdir()
+    assert _reason(cfg, clock) == "missing"
+
+
+def test_job_end_reason_empty_folder_with_a_backup(tmp_path, make_cfg, clock):
+    cfg = make_cfg()
+    (tmp_path / "dest").mkdir()
+    (tmp_path / "dest" / "a.txt").write_text("one")
+    assert _reason(cfg, clock) == "empty_with_backup"
+
+
+def test_job_end_reason_unreadable_destination(tmp_path, make_cfg, clock, monkeypatch):
+    cfg = make_cfg()
+    real = engine.rclone
+    monkeypatch.setattr(engine, "rclone", lambda c, args, **kw: (1, "") if args[0] == "lsf" else real(c, args, **kw))
+    assert _reason(cfg, clock) == "dest_unreadable"
+
+
+def test_job_end_reason_mkdir_failed(tmp_path, make_cfg, clock, monkeypatch):
+    cfg = make_cfg()
+    real = engine.rclone
+    monkeypatch.setattr(engine, "rclone", lambda c, args, **kw: (1, "") if args[0] == "mkdir" else real(c, args, **kw))
+    assert _reason(cfg, clock) == "mkdir_failed"
+
+
+def test_job_end_reason_rclone_failure_and_success(tmp_path, make_cfg, clock, monkeypatch):
+    cfg = make_cfg()
+    (tmp_path / "src" / "a.txt").write_text("one")
+    assert _reason(cfg, clock) == ""
+    monkeypatch.setattr(engine, "stream", lambda argv, env, log, emit=None, handle=None: 1)
+    assert _reason(cfg, clock) == "rclone"
+
+
+def test_run_log_is_readable_and_the_same_on_screen_and_in_the_file(tmp_path, make_cfg, clock):
+    cfg = make_cfg(device=device(tmp_path, probe=False))
+    (tmp_path / "src" / "a.txt").write_text("one")
+    (tmp_path / "src" / "sub").mkdir()
+    (tmp_path / "src" / "sub" / "b.txt").write_text("two!")
+    shown = []
+    engine.run_backup(cfg, now=clock(), emit=shown.append)
+    text = read(engine.state_dir() / "run.log")
+    assert text.splitlines() == shown
+    lines = shown
+    assert lines[0].startswith(f"Lifeboat {engine.__version__} · backup of thinkpad · ")
+    assert re.fullmatch(r"\d\d:\d\d:\d\d  Docs  .*src → Google Drive: .*dest", lines[1]), lines[1]
+    assert any(re.fullmatch(r"\d\d:\d\d:\d\d  Docs  copied a.txt \(new, 3 B\)", ln) for ln in lines)
+    assert any(re.fullmatch(r"\d\d:\d\d:\d\d  Docs  done 2 files, 7 B, \d+ s", ln) for ln in lines)
+    assert any("Lifeboat saved the list of backed-up folders" in ln for ln in lines)
+    assert re.fullmatch(r"\d\d:\d\d:\d\d  Finished: backed up 2 files in \d+ s", lines[-1]), lines[-1]
+    assert "rc=" not in text and "modification time" not in text and '{"level"' not in text
+
+
+def test_failed_run_log_ends_with_a_problem_footer(tmp_path, make_cfg, clock):
+    cfg = make_cfg()
+    (tmp_path / "src").rmdir()
+    shown = []
+    engine.run_backup(cfg, now=clock(), emit=shown.append)
+    assert any("ERROR refusing to sync" in ln for ln in shown)
+    assert shown[-1].endswith("Finished with problems: 1 folder not backed up")
+
+
+def test_settings_command_output_is_stamped_not_dropped(tmp_path, make_cfg, clock):
+    cfg = make_cfg()
+    cfg.settings_command = "echo from-settings"
+    (tmp_path / "src" / "a.txt").write_text("one")
+    shown = []
+    engine.run_backup(cfg, now=clock(), emit=shown.append)
+    assert any(re.fullmatch(r"\d\d:\d\d:\d\d  Settings  from-settings", ln) for ln in shown), shown
+
+
+def test_restore_output_is_readable_too(tmp_path, make_cfg, clock):
+    cfg = make_cfg()
+    (tmp_path / "src" / "a.txt").write_text("one")
+    engine.run_backup(cfg, now=clock())
+    shown = []
+    assert engine.restore(cfg, "docs", tmp_path / "out", emit=shown.append) == 0
+    assert any("copied a.txt (new, 3 B)" in ln for ln in shown) and not any(ln.startswith("{") for ln in shown)
+
+
+# ---------------------------------------------------------------- wrong passphrase
+def wrong_key(tmp_path, monkeypatch):
+    """Point the vault remote at the same folder with a different passphrase."""
+    bad = subprocess.run(["rclone", "obscure", "wrong-password"], capture_output=True, text=True, check=True).stdout.strip()
+    monkeypatch.setenv("RCLONE_CONFIG_VAULT_PASSWORD", bad)
+
+
+def tree(root):
+    return sorted((str(p), p.stat().st_mtime_ns) for p in root.rglob("*") if p.is_file())
+
+
+def test_wrong_passphrase_refuses_encrypted_jobs_writes_nothing_and_still_runs_plain_jobs(tmp_path, make_cfg, clock, monkeypatch):
+    cfg = make_cfg(crypt=True, device=device(tmp_path, probe=True))
+    cfg.jobs.append(replace(cfg.jobs[0], name="plain", dest=f"localdrv:{tmp_path}/plain", old=f"localdrv:{tmp_path}/plain-old", encrypted=False))
+    (tmp_path / "src" / "a.txt").write_text("one")
+    assert engine.run_backup(cfg, now=clock(0))["ok"]
+    before = tree(tmp_path / "crypt")
+    wrong_key(tmp_path, monkeypatch)
+    (tmp_path / "src" / "b.txt").write_text("two")
+    events = []
+    st = engine.run_backup(cfg, now=clock(60), on_event=events.append)
+    assert tree(tmp_path / "crypt") == before  # no new probe, no upload under the wrong key
+    ends = {e["name"]: e for e in events if e["event"] == "job_end"}
+    assert ends["docs"]["reason"] == "wrong_passphrase" and ends["docs"]["rc"] != 0 and ends["docs"]["files"] == 0
+    assert ends["plain"]["rc"] == 0 and (tmp_path / "plain" / "b.txt").exists()
+    assert not st["ok"] and "probe" not in st
+    assert "passphrase" in read(tmp_path / "state" / "lifeboat" / "run.log")
+
+
+def test_wrong_passphrase_ignores_a_missing_probe_when_the_right_key_reads_the_folder(tmp_path, make_cfg, clock):
+    first = make_cfg(crypt=True, device=device(tmp_path, "thinkpad", probe=True))
+    (tmp_path / "src" / "a.txt").write_text("one")
+    assert engine.run_backup(first, now=clock(0))["ok"]
+    st = engine.run_backup(make_cfg(crypt=True, device=device(tmp_path, "macbook", probe=True)), now=clock(60))  # second device, same key
+    assert st["ok"] and st["probe"]["ok"] and engine.check_probe("vault:macbook/.lifeboat-probe")
+
+
+def test_unknown_crypt_target_refuses_encrypted_jobs_without_writing(tmp_path, make_cfg, clock, monkeypatch):
+    cfg = make_cfg(crypt=True, device=device(tmp_path, probe=True))
+    (tmp_path / "src" / "a.txt").write_text("one")
+    monkeypatch.delenv("RCLONE_CONFIG_VAULT_REMOTE")
+    events = []
+    st = engine.run_backup(cfg, now=clock(), on_event=events.append)
+    assert not st["ok"] and "probe" not in st and not (tmp_path / "crypt").exists()
+    assert [e["reason"] for e in events if e["event"] == "job_end"] == ["dest_unreadable"]
+
+
+def fake_listing(monkeypatch, dirs="", files=""):
+    """Make the crypt root listing return names, as a wrong key does ~0.4% of the time per entry (a garbage name that passes unpadding)."""
+    real = engine.rclone
+
+    def patched(cfg, args, *a, **kw):
+        if args[:1] == ["lsf"] and "vault:" in args:
+            if "--files-only" in args:
+                if files:
+                    return 0, files
+            elif dirs:
+                return 0, dirs
+        return real(cfg, args, *a, **kw)
+    monkeypatch.setattr(engine, "rclone", patched)
+
+
+@pytest.mark.parametrize("files", ["", "garbage/x\n"])
+def test_a_garbage_name_under_the_wrong_key_is_still_wrong(tmp_path, make_cfg, clock, monkeypatch, files):
+    first = make_cfg(crypt=True)
+    (tmp_path / "src" / "a.txt").write_text("one")
+    assert engine.run_backup(first, now=clock(0))["ok"]  # data under the right key, no probe
+    cfg = make_cfg(crypt=True, device=device(tmp_path, probe=True))
+    wrong_key(tmp_path, monkeypatch)
+    fake_listing(monkeypatch, dirs="garbage/\n", files=files)
+    assert engine.passphrase_state(cfg) in ("wrong", "unknown")  # either refuses; the fake file is missing rather than failing its MAC
+
+
+def test_data_under_this_key_without_a_probe_is_new(tmp_path, make_cfg, clock):
+    first = make_cfg(crypt=True)  # an interrupted first run: uploads, no probe
+    (tmp_path / "src" / "a.txt").write_text("one")
+    assert engine.run_backup(first, now=clock(0))["ok"]
+    assert engine.passphrase_state(make_cfg(crypt=True, device=device(tmp_path, probe=True))) == "new"
+
+
+def test_a_sibling_devices_probe_is_new_and_the_wrong_key_cannot_read_it(tmp_path, make_cfg, clock, monkeypatch):
+    first = make_cfg(crypt=True, device=device(tmp_path, "thinkpad", probe=True))
+    (tmp_path / "src" / "a.txt").write_text("one")
+    assert engine.run_backup(first, now=clock(0))["ok"]
+    cfg = make_cfg(crypt=True, device=device(tmp_path, "macbook", probe=True))
+    assert engine.passphrase_state(cfg) == "new"
+    wrong_key(tmp_path, monkeypatch)
+    assert engine.passphrase_state(cfg) == "wrong"
+
+
+def test_the_probe_exists_before_the_first_upload_and_a_dry_run_makes_none(tmp_path, make_cfg, clock, monkeypatch):
+    cfg = make_cfg(crypt=True, device=device(tmp_path, probe=True))
+    (tmp_path / "src" / "a.txt").write_text("one")
+    assert engine.run_backup(cfg, dry_run=True, now=clock(0))["ok"] and not (tmp_path / "crypt").exists()
+    seen = []
+    real = engine.stream
+    monkeypatch.setattr(engine, "stream", lambda *a, **kw: seen.append(engine.check_probe(cfg.probe)) or real(*a, **kw))
+    st = engine.run_backup(cfg, now=clock(60))
+    assert seen == [True] and st["probe"]["ok"]
+
+
+def test_the_passphrase_is_only_checked_when_a_job_is_encrypted(tmp_path, make_cfg, clock, monkeypatch):
+    calls = []
+    monkeypatch.setattr(engine, "passphrase_state", lambda cfg: calls.append(1) or "ok")
+    cfg = make_cfg(device=device(tmp_path, probe=True))
+    (tmp_path / "src" / "a.txt").write_text("one")
+    engine.run_backup(cfg, now=clock(0))
+    assert calls == []
+    engine.run_backup(make_cfg(crypt=True, device=device(tmp_path, probe=True)), now=clock(60))
+    assert calls == [1]
+
+
+def test_dry_run_log_says_what_would_be_copied_not_up_to_date(tmp_path, make_cfg, clock):
+    cfg = make_cfg()
+    (tmp_path / "src" / "a.txt").write_text("one")
+    (tmp_path / "src" / "b.txt").write_text("three")
+    engine.run_backup(cfg, dry_run=True, now=clock(0))
+    log = read(tmp_path / "state" / "lifeboat" / "run.log")
+    assert "dry run, would copy 2 files, 8 B" in log and "already up to date" not in log
+    engine.run_backup(cfg, now=clock(60))
+    engine.run_backup(cfg, dry_run=True, now=clock(120))
+    assert "done, already up to date" in read(tmp_path / "state" / "lifeboat" / "run.log")
+
+
+def test_only_deep_files_under_the_wrong_key_is_still_wrong(tmp_path, make_cfg, monkeypatch):
+    cfg = make_cfg(crypt=True, device=device(tmp_path, probe=True))
+    assert engine.rclone(cfg, ["rcat", "vault:a/b/c/d/deep.txt"], input="x", env=engine.rclone_env(cfg))[0] == 0  # no probe, nothing shallow
+    wrong_key(tmp_path, monkeypatch)
+    assert engine.passphrase_state(cfg) == "wrong"
+
+
+def test_a_failed_read_that_is_not_a_bad_key_is_unknown_not_wrong(tmp_path, make_cfg, monkeypatch):
+    cfg = make_cfg(crypt=True, device=device(tmp_path, probe=True))
+    assert engine.rclone(cfg, ["rcat", "vault:x/f.txt"], input="x", env=engine.rclone_env(cfg))[0] == 0  # no probe
+    real = subprocess.run
+    def flaky(argv, **kw):  # Drive dropped the read: no MAC failure, so no verdict on the key
+        return subprocess.CompletedProcess(argv, 1, "", "Failed to cat: couldn't connect") if "cat" in argv and "--count" in argv else real(argv, **kw)
+    monkeypatch.setattr(engine.subprocess, "run", flaky)
+    assert engine.passphrase_state(cfg) == "unknown"
+
+
+def test_only_encrypted_jobs_write_the_probe(tmp_path, make_cfg, clock):
+    cfg = make_cfg(crypt=True, device=device(tmp_path, probe=True))
+    cfg.jobs[:] = [replace(cfg.jobs[0], encrypted=False, dest=f"localdrv:{tmp_path}/plain", old=f"localdrv:{tmp_path}/plain-old")]
+    (tmp_path / "src" / "a.txt").write_text("one")
+    st = engine.run_backup(cfg, now=clock(0))
+    assert st["ok"] and "probe" not in st and not engine.check_probe(cfg.probe)  # an unchecked key never plants a probe

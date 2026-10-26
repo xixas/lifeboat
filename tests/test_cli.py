@@ -68,7 +68,7 @@ def test_run_json_stdout_is_one_document(env, make_cfg, capsys):
     cap = capsys.readouterr()
     doc = json.loads(cap.out)
     assert doc["ok"] is True and doc["settings_ok"] is True and doc["jobs"][0]["name"] == "docs"
-    assert "docs rc=0" in cap.err and "rc=" not in cap.out.replace('"rc"', "")
+    assert "Docs  done 1 file" in cap.err and "rc=" not in cap.out.replace('"rc"', "")
 
 
 def test_versions_json(env, make_cfg, capsys):
@@ -274,3 +274,22 @@ def test_init_guidance_says_add_first_and_placeholders(env, capsys):
     assert cli.main(["init"]) == 0
     out = capsys.readouterr().out
     assert out.index("add-job") < out.index("remove-job") and "placeholder" in out
+
+
+def test_run_events_are_json_lines_on_stdout_and_logs_on_stderr(env, make_cfg, capsys):
+    write_cfg(env, make_cfg)
+    (env / "src" / "f").write_text("1")
+    assert cli.main(["run", "--events"]) == 0
+    cap = capsys.readouterr()
+    events = [json.loads(ln) for ln in cap.out.splitlines()]
+    assert [e["event"] for e in events] == ["job_start", "job_end", "done"]
+    assert events[1]["files"] == 1 and events[2] == {"event": "done", "ok": True}
+    assert "Docs  done 1 file" in cap.err and "copied f (new" in cap.err
+
+
+def test_run_events_done_is_false_when_a_job_fails(env, make_cfg, capsys):
+    write_cfg(env, make_cfg)
+    (env / "src").rmdir()
+    assert cli.main(["run", "--events"]) == 1
+    events = [json.loads(ln) for ln in capsys.readouterr().out.splitlines()]
+    assert events[1]["rc"] == 2 and "refusing to sync" in events[1]["error"] and events[-1] == {"event": "done", "ok": False}

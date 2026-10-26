@@ -97,7 +97,7 @@ class SetupWizard(AccountDialog):
     def _restore_picked(self):
         """Hand the signed-in account over, so the restore wizard does not ask to sign in again."""
         handover = {"token": self.token, "existing": self.existing, "conf_made_here": self._conf_made_here,
-                    "same_laptop": self.picked == self.same}  # a reinstall carries on with its own backup
+                    "same_laptop": self.same}  # a reinstall carries on with its own backup
         self._conf_made_here = False  # the restore wizard owns the conf now: closing this one must not delete it
         self.force_close()
         self.win.open_restore_wizard(self.picked, handover)

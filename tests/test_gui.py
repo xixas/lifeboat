@@ -996,9 +996,9 @@ wiz.force_close()
 pump(timeout=0.4)
 assert not CONF.exists(), "token left behind after bailing out"
 
-# ---- this laptop's own backup (a reinstall): continue it, even though it ran minutes ago
+# ---- this laptop's own backup (a reinstall): continue it, even though it ran 2 h ago
 import socket
-found[:] = [OLD, dict(manifest("this-laptop", 0.1), host=socket.gethostname())]
+found[:] = [OLD, dict(manifest("this-laptop", 2), host=socket.gethostname())]
 inst.clear()
 sw = wizard.SetupWizard(win)
 sw.present(win)

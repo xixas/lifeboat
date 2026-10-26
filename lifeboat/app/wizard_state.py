@@ -55,13 +55,12 @@ def job_label(name: str) -> str:
 def keep_backing_up_default(manifest: dict, now: datetime, same_laptop: bool = False) -> bool:
     """Continue the old device's backups by default only when its last run is over 24 h old (or unreadable): a laptop
     that backed up today is probably still in use, and two laptops must not share one backup folder. A backup that
-    looks like this laptop's own (a reinstall) is always continued."""
-    if same_laptop:
-        return True
+    looks like this laptop's own (a reinstall) is continued unless it ran within the hour: a reinstall cannot have,
+    a cloned disk still running can."""
     t = parse_time(manifest.get("time"))
     if t is not None and t.tzinfo is None:
         now = now.replace(tzinfo=None)
-    return t is None or (now - t).total_seconds() > 24 * 3600
+    return t is None or (now - t).total_seconds() > (3600 if same_laptop else 24 * 3600)
 
 
 def since_text(iso) -> str:

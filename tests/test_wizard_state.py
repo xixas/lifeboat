@@ -126,4 +126,7 @@ def test_same_laptop_ignores_a_distro_default_hostname():
 def test_keep_backing_up_defaults_on_for_this_laptops_own_backup():
     # a reinstall: the backup is this laptop's, so a fresh last run does not mean another laptop is still using it
     now = datetime(2026, 10, 23, 12, 0, tzinfo=UTC)
-    assert keep_backing_up_default({"time": (now - timedelta(minutes=1)).isoformat()}, now, same_laptop=True) is True
+    ago = lambda h: {"time": (now - timedelta(hours=h)).isoformat()}  # noqa: E731
+    assert keep_backing_up_default(ago(2), now, same_laptop=True) is True
+    # but not minutes ago: a reinstall cannot have backed up that recently, a cloned disk still running can
+    assert keep_backing_up_default(ago(0.5), now, same_laptop=True) is False

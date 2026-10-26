@@ -29,7 +29,7 @@ def validate_device_name(name: str, existing: list[str]) -> str | None:
 
 # hostnames a fresh install ships with: shared by unrelated laptops, so never evidence of "this laptop"
 GENERIC_HOSTS = {"localhost", "fedora", "nobara", "ubuntu", "debian", "archlinux", "pop-os",
-                 "linuxmint", "manjaro", "opensuse", "endeavouros", "bazzite", "linux"}
+                 "linuxmint", "manjaro", "opensuse", "endeavouros", "bazzite", "steamdeck", "linux"}
 
 
 def same_laptop_backup(existing: list[dict], hostname: str, default_name: str) -> str | None:

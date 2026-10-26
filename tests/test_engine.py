@@ -647,3 +647,57 @@ def test_unknown_crypt_target_refuses_encrypted_jobs_without_writing(tmp_path, m
     st = engine.run_backup(cfg, now=clock(), on_event=events.append)
     assert not st["ok"] and "probe" not in st and not (tmp_path / "crypt").exists()
     assert [e["reason"] for e in events if e["event"] == "job_end"] == ["dest_unreadable"]
+
+
+def fake_listing(monkeypatch, dirs="", files=""):
+    """Make the crypt root listing return names, as a wrong key does ~0.4% of the time per entry (a garbage name that passes unpadding)."""
+    real = engine.rclone
+
+    def patched(cfg, args, *a, **kw):
+        if args[:1] == ["lsf"] and "vault:" in args:
+            if "--files-only" in args:
+                if files:
+                    return 0, files
+            elif dirs:
+                return 0, dirs
+        return real(cfg, args, *a, **kw)
+    monkeypatch.setattr(engine, "rclone", patched)
+
+
+@pytest.mark.parametrize("files", ["", "garbage/x\n"])
+def test_a_garbage_name_under_the_wrong_key_is_still_wrong(tmp_path, make_cfg, clock, monkeypatch, files):
+    first = make_cfg(crypt=True)
+    (tmp_path / "src" / "a.txt").write_text("one")
+    assert engine.run_backup(first, now=clock(0))["ok"]  # data under the right key, no probe
+    cfg = make_cfg(crypt=True, device=device(tmp_path, probe=True))
+    wrong_key(tmp_path, monkeypatch)
+    fake_listing(monkeypatch, dirs="garbage/\n", files=files)
+    assert engine.passphrase_state(cfg) == "wrong"
+
+
+def test_data_under_this_key_without_a_probe_is_new(tmp_path, make_cfg, clock):
+    first = make_cfg(crypt=True)  # an interrupted first run: uploads, no probe
+    (tmp_path / "src" / "a.txt").write_text("one")
+    assert engine.run_backup(first, now=clock(0))["ok"]
+    assert engine.passphrase_state(make_cfg(crypt=True, device=device(tmp_path, probe=True))) == "new"
+
+
+def test_a_sibling_devices_probe_is_new_and_the_wrong_key_cannot_read_it(tmp_path, make_cfg, clock, monkeypatch):
+    first = make_cfg(crypt=True, device=device(tmp_path, "thinkpad", probe=True))
+    (tmp_path / "src" / "a.txt").write_text("one")
+    assert engine.run_backup(first, now=clock(0))["ok"]
+    cfg = make_cfg(crypt=True, device=device(tmp_path, "macbook", probe=True))
+    assert engine.passphrase_state(cfg) == "new"
+    wrong_key(tmp_path, monkeypatch)
+    assert engine.passphrase_state(cfg) == "wrong"
+
+
+def test_the_probe_exists_before_the_first_upload_and_a_dry_run_makes_none(tmp_path, make_cfg, clock, monkeypatch):
+    cfg = make_cfg(crypt=True, device=device(tmp_path, probe=True))
+    (tmp_path / "src" / "a.txt").write_text("one")
+    assert engine.run_backup(cfg, dry_run=True, now=clock(0))["ok"] and not (tmp_path / "crypt").exists()
+    seen = []
+    real = engine.stream
+    monkeypatch.setattr(engine, "stream", lambda *a, **kw: seen.append(engine.check_probe(cfg.probe)) or real(*a, **kw))
+    st = engine.run_backup(cfg, now=clock(60))
+    assert seen == [True] and st["probe"]["ok"]

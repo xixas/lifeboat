@@ -27,9 +27,16 @@ def validate_device_name(name: str, existing: list[str]) -> str | None:
     return None
 
 
+# hostnames a fresh install ships with: shared by unrelated laptops, so never evidence of "this laptop"
+GENERIC_HOSTS = {"localhost", "fedora", "nobara", "ubuntu", "debian", "archlinux", "pop-os",
+                 "linuxmint", "manjaro", "opensuse", "endeavouros", "bazzite", "linux"}
+
+
 def same_laptop_backup(existing: list[dict], hostname: str, default_name: str) -> str | None:
     """The device name of the backup that looks like this laptop, or None. The manifest's recorded host is the evidence;
     the device name only counts for manifests without a host, since a name alone is easily shared ('laptop')."""
+    if hostname.partition(".")[0].lower() in GENERIC_HOSTS:
+        return None
     for m in existing:
         if m.get("host") == hostname or (not m.get("host") and m["device"] == default_name):
             return m["device"]

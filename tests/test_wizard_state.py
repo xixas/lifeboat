@@ -115,3 +115,9 @@ def test_same_laptop_matches_the_manifest_host():
     mine = {"device": "work", "host": "fedora-box"}
     assert same_laptop_backup([{"device": "other", "host": "x"}, mine], "fedora-box", "fedora-box") == "work"
     assert same_laptop_backup([{"device": "other", "host": "x"}], "fedora-box", "fedora-box") is None
+
+
+def test_same_laptop_ignores_a_distro_default_hostname():
+    # 'fedora' is every fresh Fedora install: matching it would point a new laptop at a stranger's backup
+    for host in ("fedora", "localhost.localdomain", "localhost", "ubuntu", "nobara"):
+        assert same_laptop_backup([{"device": host, "host": host}], host, host) is None, host

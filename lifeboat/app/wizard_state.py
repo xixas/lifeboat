@@ -23,7 +23,16 @@ def validate_device_name(name: str, existing: list[str]) -> str | None:
     if not NAME_RE.match(name):
         return "Use letters, digits, '.', '_' and '-', starting with a letter or digit."
     if name in existing:
-        return "Another laptop on this account already uses this name."
+        return "Another laptop on this account already uses this name. If this is that laptop, go back and restore from it."
+    return None
+
+
+def same_laptop_backup(existing: list[dict], hostname: str, default_name: str) -> str | None:
+    """The device name of the backup that looks like this laptop, or None. The manifest's recorded host is the evidence;
+    the device name only counts for manifests without a host, since a name alone is easily shared ('laptop')."""
+    for m in existing:
+        if m.get("host") == hostname or (not m.get("host") and m["device"] == default_name):
+            return m["device"]
     return None
 
 

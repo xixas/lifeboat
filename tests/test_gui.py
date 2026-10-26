@@ -333,7 +333,7 @@ wiz.force_close()
 pump(timeout=0.2)
 
 # ---- scenario 3: account already has a backup, add this laptop
-setup.find_backups = lambda conf: [{"device": setup.default_device_name(), "time": datetime.now(timezone.utc).isoformat(),
+setup.find_backups = lambda conf: [{"device": setup.default_device_name(), "host": "some-other-box", "time": datetime.now(timezone.utc).isoformat(),
                                     "jobs": [{"name": "a"}, {"name": "b"}]}]
 setup.new_passphrase = lambda: (_ for _ in ()).throw(AssertionError("must not mint a second passphrase"))
 wiz = start()
@@ -521,6 +521,33 @@ assert not wiz.group_folders.get_visible()
 wiz.force_close()
 pump(timeout=0.3)
 setup.suggest_folders = real_suggest
+
+# this laptop's own backup is recognised: pre-picked, labelled, and Restore becomes the recommended action
+import socket
+setup.find_backups = lambda conf: [
+    {"device": "other", "host": "elsewhere", "time": datetime.now(timezone.utc).isoformat(), "jobs": [{"name": "a"}]},
+    {"device": "old-name", "host": socket.gethostname(), "time": datetime.now(timezone.utc).isoformat(), "jobs": [{"name": "a"}]}]
+start()
+click(vis(), "Continue")
+click(vis(), "Sign In With Google")
+assert pump(lambda: tag() == "existing")
+subs = {w.get_title(): w.get_subtitle() for w in walk(vis()) if isinstance(w, Adw.ActionRow)}
+assert subs["old-name"].startswith("Looks like this laptop · Last backup") and "Looks like" not in subs["other"], subs
+assert wiz.picked == "old-name"
+bar = [b for b in buttons(vis()) if b.get_label() in ("Add This Laptop", "Restore From old-name")]
+assert [b.get_label() for b in bar] == ["Add This Laptop", "Restore From old-name"] and bar[1].has_css_class("suggested-action"), bar
+shot("06c-existing-same-laptop")
+click(vis(), "Add This Laptop")
+wiz.name_row.set_text("old-name")
+assert wiz.name_err.get_label().endswith("go back and restore from it."), wiz.name_err.get_label()
+sw = next(w for w in walk(vis()) if isinstance(w, Gtk.ScrolledWindow))
+pump(timeout=0.5)
+adj = sw.get_vadjustment()
+adj.set_value(adj.get_upper())  # the message sits under the fold
+pump(timeout=0.5)
+shot("06d-name-clash")
+wiz.force_close()
+pump(timeout=0.3)
 
 # one existing device still looks like a single choice (radio), with the suggested action last
 setup.find_backups = lambda conf: [{"device": "solo", "time": datetime.now(timezone.utc).isoformat(), "jobs": [{"name": "a"}]}]

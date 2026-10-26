@@ -9,6 +9,7 @@ from lifeboat.app.wizard_state import (
     folders_text,
     job_label,
     keep_backing_up_default,
+    same_laptop_backup,
     since_text,
     tilde,
     validate_device_name,
@@ -108,3 +109,9 @@ def test_keep_backing_up_defaults_on_only_when_the_old_laptop_looks_gone():
 def test_since_text():
     assert since_text("2026-10-02T09:00:00+00:00") == "Not backed up since 2 Oct 2026"
     assert since_text(None) == "Not backed up from the old laptop"
+
+
+def test_same_laptop_matches_the_manifest_host():
+    mine = {"device": "work", "host": "fedora-box"}
+    assert same_laptop_backup([{"device": "other", "host": "x"}, mine], "fedora-box", "fedora-box") == "work"
+    assert same_laptop_backup([{"device": "other", "host": "x"}], "fedora-box", "fedora-box") is None

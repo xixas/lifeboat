@@ -990,10 +990,35 @@ wiz.pw_row.set_text("right-pass")
 click(vis(), "Check")
 assert pump(lambda: tag() == "what")
 assert ("check", "right-pass", "work-laptop") in calls
+assert wiz.keep_row.get_active() is False  # another laptop's backup from 2 h ago: probably still in use
 # closing before restoring removes the conf this run created
 wiz.force_close()
 pump(timeout=0.4)
 assert not CONF.exists(), "token left behind after bailing out"
+
+# ---- this laptop's own backup (a reinstall): continue it, even though it ran minutes ago
+import socket
+found[:] = [OLD, dict(manifest("this-laptop", 0.1), host=socket.gethostname())]
+inst.clear()
+sw = wizard.SetupWizard(win)
+sw.present(win)
+pump(timeout=0.3)
+wiz = sw
+click(vis(), "Continue")
+click(vis(), "Sign In With Google")
+assert pump(lambda: tag() == "existing"), tag()
+click(vis(), "Restore From this-laptop")
+assert pump(lambda: inst, 3)
+wiz = inst[0]
+pump(timeout=0.4)
+wiz.pw_row.set_text("right-pass")
+click(vis(), "Check")
+assert pump(lambda: tag() == "what")
+assert wiz.keep_row.get_active() is True and not wiz.name_row.get_visible()  # keeps backing up as this-laptop
+shot("r17-same-laptop-keeps-backing-up")
+wiz.force_close()
+pump(timeout=0.4)
+CONF.unlink(missing_ok=True)
 
 # a conf that was already there is never deleted
 CONF.write_text("[mine]\n")

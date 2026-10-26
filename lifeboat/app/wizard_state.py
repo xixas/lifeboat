@@ -52,9 +52,12 @@ def job_label(name: str) -> str:
     return text[:1].upper() + text[1:]
 
 
-def keep_backing_up_default(manifest: dict, now: datetime) -> bool:
+def keep_backing_up_default(manifest: dict, now: datetime, same_laptop: bool = False) -> bool:
     """Continue the old device's backups by default only when its last run is over 24 h old (or unreadable): a laptop
-    that backed up today is probably still in use, and two laptops must not share one backup folder."""
+    that backed up today is probably still in use, and two laptops must not share one backup folder. A backup that
+    looks like this laptop's own (a reinstall) is always continued."""
+    if same_laptop:
+        return True
     t = parse_time(manifest.get("time"))
     if t is not None and t.tzinfo is None:
         now = now.replace(tzinfo=None)

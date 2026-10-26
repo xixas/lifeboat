@@ -380,6 +380,7 @@ def test_manifest_failure_keeps_job_rc_but_fails_the_run_and_is_a_problem(tmp_pa
 
 def test_probe_is_written_once_into_the_crypt_remote(tmp_path, make_cfg, clock):
     cfg = make_cfg(device=device(tmp_path, probe=True))
+    cfg.jobs[0] = replace(cfg.jobs[0], encrypted=True)  # the probe exists only for a config with encrypted jobs
     (tmp_path / "src" / "a.txt").write_text("one")
     st = engine.run_backup(cfg, now=clock(0))
     assert st["probe"] == {"ok": True, "rc": 0} and st["ok"]
@@ -394,6 +395,7 @@ def test_probe_is_written_once_into_the_crypt_remote(tmp_path, make_cfg, clock):
 
 def test_check_probe_true_with_right_password_false_with_wrong(tmp_path, make_cfg, clock, monkeypatch):
     cfg = make_cfg(device=device(tmp_path, probe=True))
+    cfg.jobs[0] = replace(cfg.jobs[0], encrypted=True)  # the probe exists only for a config with encrypted jobs
     (tmp_path / "src" / "a.txt").write_text("one")
     engine.run_backup(cfg, now=clock())
     bad = subprocess.run(["rclone", "obscure", "wrong-password"], capture_output=True, text=True, check=True).stdout.strip()
@@ -672,7 +674,7 @@ def test_a_garbage_name_under_the_wrong_key_is_still_wrong(tmp_path, make_cfg, c
     cfg = make_cfg(crypt=True, device=device(tmp_path, probe=True))
     wrong_key(tmp_path, monkeypatch)
     fake_listing(monkeypatch, dirs="garbage/\n", files=files)
-    assert engine.passphrase_state(cfg) == "wrong"
+    assert engine.passphrase_state(cfg) in ("wrong", "unknown")  # either refuses; the fake file is missing rather than failing its MAC
 
 
 def test_data_under_this_key_without_a_probe_is_new(tmp_path, make_cfg, clock):
@@ -731,3 +733,21 @@ def test_only_deep_files_under_the_wrong_key_is_still_wrong(tmp_path, make_cfg, 
     assert engine.rclone(cfg, ["rcat", "vault:a/b/c/d/deep.txt"], input="x", env=engine.rclone_env(cfg))[0] == 0  # no probe, nothing shallow
     wrong_key(tmp_path, monkeypatch)
     assert engine.passphrase_state(cfg) == "wrong"
+
+
+def test_a_failed_read_that_is_not_a_bad_key_is_unknown_not_wrong(tmp_path, make_cfg, monkeypatch):
+    cfg = make_cfg(crypt=True, device=device(tmp_path, probe=True))
+    assert engine.rclone(cfg, ["rcat", "vault:x/f.txt"], input="x", env=engine.rclone_env(cfg))[0] == 0  # no probe
+    real = subprocess.run
+    def flaky(argv, **kw):  # Drive dropped the read: no MAC failure, so no verdict on the key
+        return subprocess.CompletedProcess(argv, 1, "", "Failed to cat: couldn't connect") if "cat" in argv and "--count" in argv else real(argv, **kw)
+    monkeypatch.setattr(engine.subprocess, "run", flaky)
+    assert engine.passphrase_state(cfg) == "unknown"
+
+
+def test_only_encrypted_jobs_write_the_probe(tmp_path, make_cfg, clock):
+    cfg = make_cfg(crypt=True, device=device(tmp_path, probe=True))
+    cfg.jobs[:] = [replace(cfg.jobs[0], encrypted=False, dest=f"localdrv:{tmp_path}/plain", old=f"localdrv:{tmp_path}/plain-old")]
+    (tmp_path / "src" / "a.txt").write_text("one")
+    st = engine.run_backup(cfg, now=clock(0))
+    assert st["ok"] and "probe" not in st and not engine.check_probe(cfg.probe)  # an unchecked key never plants a probe

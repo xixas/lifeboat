@@ -253,7 +253,13 @@ def passphrase_state(cfg: Config) -> str:
     rc, out = rclone(cfg, ["lsf", "-R", "--files-only", "--max-depth", "3", f"{name}:"])
     first = out.split("\n")[0] if rc == 0 else ""
     if first:  # content is MAC-authenticated: one byte decrypts only under the right key
-        return "new" if rclone(cfg, ["cat", "--count", "1", f"{name}:{first}"])[0] == 0 else "wrong"
+        try:
+            p = subprocess.run(rclone_argv(cfg, ["cat", "--count", "1", f"{name}:{first}"]), env=rclone_env(cfg), capture_output=True,
+                               text=True, timeout=120, stdin=subprocess.DEVNULL)
+        except (OSError, subprocess.TimeoutExpired):
+            return "unknown"
+        # only a failed MAC says "wrong key"; a dropped connection says nothing (setup.py never calls that wrong either)
+        return "new" if p.returncode == 0 else "wrong" if "bad password" in p.stderr else "unknown"
     # no readable file: only empty dirs (every raw name decrypts) or a wrong key (names drop out of the crypt listing)
     rc, plain = rclone(cfg, ["lsf", "-R", "--max-depth", "3", f"{name}:"])
     rc2, raw = rclone(cfg, ["lsf", "-R", "--max-depth", "3", target])
@@ -349,7 +355,7 @@ def run_backup(cfg: Config, dry_run: bool = False, now: datetime | None = None, 
             rl.line("", "Lifeboat saved the list of backed-up folders" if state["manifest"]["ok"] else
                     f"ERROR could not save the list of backed-up folders (rclone exit {state['manifest']['rc']})")
             state["ok"] = state["ok"] and state["manifest"]["ok"]
-        if cfg.probe and not dry_run and not refuse:
+        if cfg.probe and not dry_run and not refuse and any(j.encrypted for j in cfg.jobs):  # an unchecked key never writes it
             state["probe"] = probe or ensure_probe(cfg)
             rl.line("", "Lifeboat passphrase check file is in place" if state["probe"]["ok"] else
                     f"ERROR could not create the passphrase check file (rclone exit {state['probe']['rc']})")

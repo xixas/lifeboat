@@ -3,6 +3,7 @@ import os
 import re
 import subprocess
 import time
+from dataclasses import replace
 from datetime import datetime
 
 import pytest
@@ -599,3 +600,50 @@ def test_restore_output_is_readable_too(tmp_path, make_cfg, clock):
     shown = []
     assert engine.restore(cfg, "docs", tmp_path / "out", emit=shown.append) == 0
     assert any("copied a.txt (new, 3 B)" in ln for ln in shown) and not any(ln.startswith("{") for ln in shown)
+
+
+# ---------------------------------------------------------------- wrong passphrase
+def wrong_key(tmp_path, monkeypatch):
+    """Point the vault remote at the same folder with a different passphrase."""
+    bad = subprocess.run(["rclone", "obscure", "wrong-password"], capture_output=True, text=True, check=True).stdout.strip()
+    monkeypatch.setenv("RCLONE_CONFIG_VAULT_PASSWORD", bad)
+
+
+def tree(root):
+    return sorted((str(p), p.stat().st_mtime_ns) for p in root.rglob("*") if p.is_file())
+
+
+def test_wrong_passphrase_refuses_encrypted_jobs_writes_nothing_and_still_runs_plain_jobs(tmp_path, make_cfg, clock, monkeypatch):
+    cfg = make_cfg(crypt=True, device=device(tmp_path, probe=True))
+    cfg.jobs.append(replace(cfg.jobs[0], name="plain", dest=f"localdrv:{tmp_path}/plain", old=f"localdrv:{tmp_path}/plain-old", encrypted=False))
+    (tmp_path / "src" / "a.txt").write_text("one")
+    assert engine.run_backup(cfg, now=clock(0))["ok"]
+    before = tree(tmp_path / "crypt")
+    wrong_key(tmp_path, monkeypatch)
+    (tmp_path / "src" / "b.txt").write_text("two")
+    events = []
+    st = engine.run_backup(cfg, now=clock(60), on_event=events.append)
+    assert tree(tmp_path / "crypt") == before  # no new probe, no upload under the wrong key
+    ends = {e["name"]: e for e in events if e["event"] == "job_end"}
+    assert ends["docs"]["reason"] == "wrong_passphrase" and ends["docs"]["rc"] != 0 and ends["docs"]["files"] == 0
+    assert ends["plain"]["rc"] == 0 and (tmp_path / "plain" / "b.txt").exists()
+    assert not st["ok"] and "probe" not in st
+    assert "passphrase" in read(tmp_path / "state" / "lifeboat" / "run.log")
+
+
+def test_wrong_passphrase_ignores_a_missing_probe_when_the_right_key_reads_the_folder(tmp_path, make_cfg, clock):
+    first = make_cfg(crypt=True, device=device(tmp_path, "thinkpad", probe=True))
+    (tmp_path / "src" / "a.txt").write_text("one")
+    assert engine.run_backup(first, now=clock(0))["ok"]
+    st = engine.run_backup(make_cfg(crypt=True, device=device(tmp_path, "macbook", probe=True)), now=clock(60))  # second device, same key
+    assert st["ok"] and st["probe"]["ok"] and engine.check_probe("vault:macbook/.lifeboat-probe")
+
+
+def test_unknown_crypt_target_refuses_encrypted_jobs_without_writing(tmp_path, make_cfg, clock, monkeypatch):
+    cfg = make_cfg(crypt=True, device=device(tmp_path, probe=True))
+    (tmp_path / "src" / "a.txt").write_text("one")
+    monkeypatch.delenv("RCLONE_CONFIG_VAULT_REMOTE")
+    events = []
+    st = engine.run_backup(cfg, now=clock(), on_event=events.append)
+    assert not st["ok"] and "probe" not in st and not (tmp_path / "crypt").exists()
+    assert [e["reason"] for e in events if e["event"] == "job_end"] == ["dest_unreadable"]

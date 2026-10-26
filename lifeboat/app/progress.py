@@ -22,6 +22,7 @@ REASONS = {
     "empty_with_backup": "Folder is empty but its backup isn't. Is the drive plugged in? Nothing was changed.",
     "dest_unreadable": "Couldn't check the backup on Google Drive. Check your connection and try again. Nothing was changed.",
     "mkdir_failed": "Couldn't create its folder on Google Drive.",
+    "wrong_passphrase": "The passphrase doesn't match this backup. Nothing was uploaded.",
 }
 
 

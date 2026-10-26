@@ -217,6 +217,36 @@ def ensure_probe(cfg: Config) -> dict:
     return {"ok": rc == 0, "rc": rc}
 
 
+def crypt_target(cfg: Config, name: str) -> str:
+    """The `remote =` a crypt remote points at ("" if unknown). Env vars (RCLONE_CONFIG_<NAME>_REMOTE) beat the config file, as in rclone."""
+    env = rclone_env(cfg)
+    if target := env.get(f"RCLONE_CONFIG_{re.sub('[^A-Z0-9]', '_', name.upper())}_REMOTE"):
+        return target
+    rc, out = rclone(cfg, ["config", "dump"], env=env)
+    try:
+        return str(json.loads(out)[name]["remote"]) if rc == 0 else ""
+    except (ValueError, KeyError, TypeError):
+        return ""
+
+
+def passphrase_state(cfg: Config) -> str:
+    """"ok" (the probe reads back), "new" (nothing is stored yet, or it is only other devices' data under this same key: safe to
+    create the probe), "wrong" (data exists under a key this passphrase cannot read) or "unknown" (could not tell: treat as unsafe)."""
+    if check_probe(cfg.probe, cfg.rclone_config, rclone_env(cfg)):
+        return "ok"
+    name = cfg.probe.partition(":")[0]
+    target = crypt_target(cfg, name)
+    if not target:
+        return "unknown"
+    rc, out = rclone(cfg, ["lsf", target, "--max-depth", "1"])
+    if rc == 3 or (rc == 0 and not out.strip()):
+        return "new"
+    if rc != 0:
+        return "unknown"
+    rc, out = rclone(cfg, ["lsf", f"{name}:", "--max-depth", "1"])  # decrypts only under the right key (a sibling device's folder)
+    return "new" if rc == 0 and out.strip() else "wrong"
+
+
 def check_probe(probe: str, rclone_config: str = "", env: dict | None = None) -> bool:
     """True only if the probe reads back through its crypt remote. A crypt remote's root listing succeeds with a
     wrong password; reading a known file does not. Works without a Lifeboat config (restore wizard)."""
@@ -243,6 +273,8 @@ def run_backup(cfg: Config, dry_run: bool = False, now: datetime | None = None, 
                f"{datetime.now():%a %d %b %Y %H:%M:%S}")
         if settings and cfg.settings_command and not dry_run:
             _run_settings(cfg, rl)
+        pstate = passphrase_state(cfg) if cfg.probe else "ok"
+        refuse = {"wrong": "wrong_passphrase", "unknown": "dest_unreadable"}.get(pstate, "")
         for job in cfg.jobs:
             t0, label = time.monotonic(), job_label(job.name)
             event({"event": "job_start", "name": job.name})
@@ -250,6 +282,14 @@ def run_backup(cfg: Config, dry_run: bool = False, now: datetime | None = None, 
             src = os.path.expanduser(job.source)
             rl.line(label, f"{job.source} → Google Drive: {job.dest.partition(':')[2] or job.dest}"
                            f"{' (encrypted)' if job.encrypted else ''}")
+            if refuse and job.encrypted:
+                reason, rc = refuse, 2
+                error = (f"{job.name}: the passphrase doesn't match this backup, nothing was uploaded" if reason == "wrong_passphrase" else
+                         f"{job.name}: could not check the passphrase against the existing backup, nothing was uploaded")
+                rl.line(label, "ERROR " + error.removeprefix(f"{job.name}: "))
+                results.append({"name": job.name, "rc": rc, "seconds": 0, "skipped": False})
+                event({"event": "job_end", "name": job.name, "rc": rc, "skipped": False, "files": 0, "error": error, "reason": reason})
+                continue
             empty = not has_files(src)
             dest = dest_state(cfg, job, env) if empty and os.path.isdir(src) else ""
             skipped = dest == "empty"
@@ -292,7 +332,7 @@ def run_backup(cfg: Config, dry_run: bool = False, now: datetime | None = None, 
             rl.line("", "Lifeboat saved the list of backed-up folders" if state["manifest"]["ok"] else
                     f"ERROR could not save the list of backed-up folders (rclone exit {state['manifest']['rc']})")
             state["ok"] = state["ok"] and state["manifest"]["ok"]
-        if cfg.probe and not dry_run:
+        if cfg.probe and not dry_run and not refuse:
             state["probe"] = ensure_probe(cfg)
             rl.line("", "Lifeboat passphrase check file is in place" if state["probe"]["ok"] else
                     f"ERROR could not create the passphrase check file (rclone exit {state['probe']['rc']})")

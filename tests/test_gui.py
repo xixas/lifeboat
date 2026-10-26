@@ -1041,11 +1041,16 @@ assert "Try Again" in [b.get_label() for b in buttons(bp.dlg.get_child())] and b
 shot("progress-2-failed")
 
 for reason, want in (("missing", "doesn't exist any more"), ("dest_unreadable", "Check your connection"),
-                     ("mkdir_failed", "create its folder"), ("rclone", "ERROR : boom")):
-    st = progress.Step("x")
+                     ("mkdir_failed", "create its folder"), ("rclone", "ERROR : boom"),
+                     ("wrong_passphrase", "passphrase doesn't match")):
+    st = progress.Step("Documents (encrypted)")
     bp.list.append(st.row)
-    bp._job_end(st, {"rc": 1, "error": "ERROR : boom", "reason": reason})
+    bp._job_end(st, {"rc": 2, "error": "ERROR : boom", "reason": reason})
     assert want in st.row.get_subtitle(), (reason, st.row.get_subtitle())
+    if reason == "wrong_passphrase":
+        bp.list.remove(st.row)
+        bp.list.insert(st.row, 0)  # on top, in view for the picture
+        shot("progress-4-wrong-passphrase")
     bp.list.remove(st.row)
 
 # the Log toggle swaps pages, "Show in Log" lands on the failed job's lines

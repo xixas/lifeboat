@@ -712,3 +712,15 @@ def test_the_passphrase_is_only_checked_when_a_job_is_encrypted(tmp_path, make_c
     assert calls == []
     engine.run_backup(make_cfg(crypt=True, device=device(tmp_path, probe=True)), now=clock(60))
     assert calls == [1]
+
+
+def test_dry_run_log_says_what_would_be_copied_not_up_to_date(tmp_path, make_cfg, clock):
+    cfg = make_cfg()
+    (tmp_path / "src" / "a.txt").write_text("one")
+    (tmp_path / "src" / "b.txt").write_text("three")
+    engine.run_backup(cfg, dry_run=True, now=clock(0))
+    log = read(tmp_path / "state" / "lifeboat" / "run.log")
+    assert "dry run, would copy 2 files, 8 B" in log and "already up to date" not in log
+    engine.run_backup(cfg, now=clock(60))
+    engine.run_backup(cfg, dry_run=True, now=clock(120))
+    assert "done, already up to date" in read(tmp_path / "state" / "lifeboat" / "run.log")

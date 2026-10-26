@@ -328,8 +328,9 @@ def run_backup(cfg: Config, dry_run: bool = False, now: datetime | None = None, 
                     error = error or f"{job.name}: rclone exited with code {rc}"
                     rl.line(label, f"ERROR rclone exited with code {rc}" if not tracker.error else "failed")
                 else:
-                    rl.line(label, f"done {plural(files, 'file')}, {human_size(tracker.bytes)}, {seconds} s" if files
-                            else "done, already up to date")
+                    rl.line(label, f"done {plural(files, 'file')}, {human_size(tracker.bytes)}, {seconds} s" if files else
+                            f"dry run, would copy {plural(tracker.would, 'file')}, {human_size(tracker.would_bytes)}" if tracker.would else
+                            "done, already up to date")
             if error and reason != "rclone":
                 rl.line(label, "ERROR " + error.removeprefix(f"{job.name}: "))
             results.append({"name": job.name, "rc": rc, "seconds": int(time.monotonic() - t0), "skipped": skipped})

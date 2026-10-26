@@ -1,4 +1,5 @@
 import json
+import subprocess
 from datetime import datetime
 
 from lifeboat.runlog import Rclone, RunLog, human_size
@@ -61,3 +62,15 @@ def test_runlog_stamps_time_and_label_into_log_and_emit():
     assert lines == [x + "\n" for x in out]
     rl.raw("Lifeboat 0.4.0 · backup of x")
     assert out[-1] == "Lifeboat 0.4.0 · backup of x"
+
+
+def test_dry_run_notices_from_real_rclone_count_files_that_would_be_copied(tmp_path):
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "a.txt").write_text("one")
+    (tmp_path / "src" / "b.txt").write_text("three")
+    p = subprocess.run(["rclone", "copy", str(tmp_path / "src"), str(tmp_path / "dest"), "--dry-run", "--use-json-log", "--log-level", "INFO",
+                        "--stats", "0"], capture_output=True, text=True, check=True)
+    r = Rclone()
+    for line in p.stderr.splitlines():
+        r.feed(line)
+    assert (r.files, r.would, r.would_bytes) == (0, 2, 8) and not (tmp_path / "dest").exists()

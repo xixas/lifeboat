@@ -26,6 +26,7 @@ class Rclone:
 
     def __init__(self):
         self.files, self.bytes, self.error = 0, 0, ""
+        self.would, self.would_bytes = 0, 0  # files a --dry-run would copy (rclone 1.74: one "Skipped copy as --dry-run is set" notice each)
 
     def feed(self, raw: str) -> str | None:
         try:
@@ -50,6 +51,9 @@ class Rclone:
             self.bytes += size
             kind = "replaced" if "replaced" in msg else "new"
             return f"copied {obj} ({kind}, {human_size(size)})"
+        if msg.startswith("Skipped copy as --dry-run") and named:
+            self.would += 1
+            self.would_bytes += rec["size"] if isinstance(rec.get("size"), int) else 0  # the line itself is shown as rclone wrote it
         if msg.startswith("Moved") and named:
             return f"kept the old copy of {obj}"
         return ("WARNING " if level == "warning" else "") + text

@@ -284,7 +284,7 @@ def run_backup(cfg: Config, dry_run: bool = False, now: datetime | None = None, 
                f"{datetime.now():%a %d %b %Y %H:%M:%S}")
         if settings and cfg.settings_command and not dry_run:
             _run_settings(cfg, rl)
-        pstate = passphrase_state(cfg) if cfg.probe else "ok"
+        pstate = passphrase_state(cfg) if cfg.probe and any(j.encrypted for j in cfg.jobs) else "ok"
         refuse = {"wrong": "wrong_passphrase", "unknown": "dest_unreadable"}.get(pstate, "")
         probe = ensure_probe(cfg) if pstate == "new" and not dry_run else None  # before any upload, so an interrupted first run still leaves one
         for job in cfg.jobs:

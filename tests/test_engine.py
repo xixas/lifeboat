@@ -701,3 +701,14 @@ def test_the_probe_exists_before_the_first_upload_and_a_dry_run_makes_none(tmp_p
     monkeypatch.setattr(engine, "stream", lambda *a, **kw: seen.append(engine.check_probe(cfg.probe)) or real(*a, **kw))
     st = engine.run_backup(cfg, now=clock(60))
     assert seen == [True] and st["probe"]["ok"]
+
+
+def test_the_passphrase_is_only_checked_when_a_job_is_encrypted(tmp_path, make_cfg, clock, monkeypatch):
+    calls = []
+    monkeypatch.setattr(engine, "passphrase_state", lambda cfg: calls.append(1) or "ok")
+    cfg = make_cfg(device=device(tmp_path, probe=True))
+    (tmp_path / "src" / "a.txt").write_text("one")
+    engine.run_backup(cfg, now=clock(0))
+    assert calls == []
+    engine.run_backup(make_cfg(crypt=True, device=device(tmp_path, probe=True)), now=clock(60))
+    assert calls == [1]

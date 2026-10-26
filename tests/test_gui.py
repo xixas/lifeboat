@@ -10,6 +10,8 @@ import pytest
 
 pytest.importorskip("gi")
 
+BROADWAY = os.environ.get("LIFEBOAT_TEST_BROADWAY", ":9")  # a different display per parallel run
+
 SCRIPT = '''
 import sys
 import gi
@@ -49,10 +51,10 @@ def test_main_window_builds_with_and_without_config(env, make_cfg):
     j = cfg.jobs[0]
     text = (f'[[jobs]]\nname = "docs"\nsource = "{j.source}"\ndest = "{j.dest}"\nold = "{j.old}"\n'
             '[modules]\nclaude_skills = "off"\n')
-    bw = subprocess.Popen(["gtk4-broadwayd", ":9"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    bw = subprocess.Popen(["gtk4-broadwayd", BROADWAY], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     try:
         time.sleep(1)
-        e = dict(os.environ, GDK_BACKEND="broadway", BROADWAY_DISPLAY=":9",
+        e = dict(os.environ, GDK_BACKEND="broadway", BROADWAY_DISPLAY=BROADWAY,
                  PYTHONPATH=str(Path(__file__).parent.parent))
         e.pop("WAYLAND_DISPLAY", None)
         p = subprocess.run([sys.executable, "-c", SCRIPT, str(cfg.path), text], env=e, capture_output=True, text=True,
@@ -1185,10 +1187,10 @@ def run_broadway(env, script, expect):
     for d in ("Documents", "Pictures", ".ssh", "Extra"):
         (home / d).mkdir(parents=True)
         (home / d / "f.txt").write_text("x")
-    bw = subprocess.Popen(["gtk4-broadwayd", ":9"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    bw = subprocess.Popen(["gtk4-broadwayd", BROADWAY], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     try:
         time.sleep(1)
-        e = dict(os.environ, GDK_BACKEND="broadway", BROADWAY_DISPLAY=":9", HOME=str(home),
+        e = dict(os.environ, GDK_BACKEND="broadway", BROADWAY_DISPLAY=BROADWAY, HOME=str(home),
                  XDG_CONFIG_HOME=str(env / "config"), XDG_STATE_HOME=str(env / "state"),
                  PYTHONPATH=str(Path(__file__).parent.parent))
         e.pop("WAYLAND_DISPLAY", None)

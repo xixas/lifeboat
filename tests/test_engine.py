@@ -724,3 +724,10 @@ def test_dry_run_log_says_what_would_be_copied_not_up_to_date(tmp_path, make_cfg
     engine.run_backup(cfg, now=clock(60))
     engine.run_backup(cfg, dry_run=True, now=clock(120))
     assert "done, already up to date" in read(tmp_path / "state" / "lifeboat" / "run.log")
+
+
+def test_only_deep_files_under_the_wrong_key_is_still_wrong(tmp_path, make_cfg, monkeypatch):
+    cfg = make_cfg(crypt=True, device=device(tmp_path, probe=True))
+    assert engine.rclone(cfg, ["rcat", "vault:a/b/c/d/deep.txt"], input="x", env=engine.rclone_env(cfg))[0] == 0  # no probe, nothing shallow
+    wrong_key(tmp_path, monkeypatch)
+    assert engine.passphrase_state(cfg) == "wrong"

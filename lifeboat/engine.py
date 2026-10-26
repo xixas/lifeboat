@@ -254,8 +254,12 @@ def passphrase_state(cfg: Config) -> str:
     first = out.split("\n")[0] if rc == 0 else ""
     if first:  # content is MAC-authenticated: one byte decrypts only under the right key
         return "new" if rclone(cfg, ["cat", "--count", "1", f"{name}:{first}"])[0] == 0 else "wrong"
-    rc, out = rclone(cfg, ["lsf", "-R", "--files-only", "--max-depth", "3", target])  # no readable file: empty dirs, or all undecryptable
-    return "new" if rc == 0 and not out.strip() else "wrong" if rc == 0 else "unknown"
+    # no readable file: only empty dirs (every raw name decrypts) or a wrong key (names drop out of the crypt listing)
+    rc, plain = rclone(cfg, ["lsf", "-R", "--max-depth", "3", f"{name}:"])
+    rc2, raw = rclone(cfg, ["lsf", "-R", "--max-depth", "3", target])
+    if rc or rc2:
+        return "unknown"
+    return "new" if len(plain.split("\n")) == len(raw.split("\n")) else "wrong"
 
 
 def check_probe(probe: str, rclone_config: str = "", env: dict | None = None) -> bool:

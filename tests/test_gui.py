@@ -1,5 +1,6 @@
 """GTK smoke test. Runs in a child process against a hidden Broadway display, never the real one."""
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -82,12 +83,18 @@ from gi.repository import Adw, Gdk, GLib, Graphene, Gsk, Gtk
 if not Gtk.init_check():
     sys.exit(77)
 Adw.init()
+Gtk.Settings.get_default().props.gtk_font_name = "Sans 13"  # a wider font than the default, so a page that only just fits is caught
 from datetime import datetime, timezone
 from pathlib import Path
 from lifeboat import setup, timer
 from lifeboat.app import flow, wizard
 from lifeboat.app.window import Win, gather
 
+_push = flow.AccountDialog.push
+def push_and_lay_out(self, page):  # the width warning fires on allocation, so give every page a frame
+    _push(self, page)
+    pump(timeout=0.25)
+flow.AccountDialog.push = push_and_lay_out
 SHOTS = os.environ.get("LIFEBOAT_SHOTS")
 if SHOTS:
     Adw.StyleManager.get_default().set_color_scheme(Adw.ColorScheme.FORCE_LIGHT)
@@ -1236,6 +1243,7 @@ def run_broadway(env, script, expect):
     assert p.returncode == 0, p.stdout + p.stderr
     assert expect in p.stdout
     assert "Traceback" not in p.stderr and "g_value" not in p.stderr, p.stderr
+    assert not re.search(r"requested \d+ px, \d+ px available", p.stderr), p.stderr  # a page too wide for its dialog
     print(p.stderr)  # errors inside signal handlers do not fail the script
 
 

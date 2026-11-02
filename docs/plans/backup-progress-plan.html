@@ -1,0 +1,390 @@
+<!doctype html>
+<html lang="en" data-theme="light" data-lavish-annotate="on">
+<head>
+<script type="application/json" data-lavish-revisions>
+[{ "id": "r1", "label": "Round 1", "timestamp": "2026-10-23T15:10:00+05:30", "summary": "Added Progress | Log switch, failure view, Copy / Save Log; recorded decisions" },
+ { "id": "r2", "label": "Round 2", "timestamp": "2026-10-23T19:35:00+05:30", "summary": "C: a clear next step when a run ends, and a readable log" }]
+</script>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lifeboat: empty folders and backup progress</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/daisyui@5.5.19/daisyui.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/daisyui@5.5.19/themes.css">
+<script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4.2.4/dist/index.global.js"></script>
+<style>
+  *, *::before, *::after { box-sizing: border-box; }
+  :where(.grid, .flex) > * { min-width: 0; }
+  :where(p, li, td, th, .badge) { overflow-wrap: anywhere; }
+  body { background: #f7f7f5; }
+  code { font-size: .85em; background: #ecebe7; padding: .05em .35em; border-radius: .3em; }
+  /* libadwaita-dark mock surface */
+  .adw { background: #242428; color: #eee; border-radius: 14px; font-family: Cantarell, "Inter", system-ui, sans-serif; box-shadow: 0 10px 30px rgba(0,0,0,.25); }
+  .adw .hb { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; padding: 10px 12px; border-bottom: 1px solid #ffffff14; }
+  .adw .title { text-align: center; font-weight: 700; font-size: 14px; }
+  .adw .sub { text-align: center; font-size: 12px; color: #ffffffa0; }
+  .adw .xbtn { justify-self: end; width: 26px; height: 26px; border-radius: 50%; background: #ffffff1a; display: grid; place-items: center; font-size: 12px; }
+  .adw .tbtn { justify-self: start; font-size: 12px; padding: 4px 10px; border-radius: 6px; background: #ffffff1a; }
+  .adw .tbtn.on { background: #ffffff33; }
+  .adw .body { padding: 18px; }
+  .adw .boxed { background: #ffffff0d; border-radius: 12px; overflow: hidden; }
+  .adw .row { display: flex; align-items: center; gap: 12px; padding: 11px 14px; border-bottom: 1px solid #00000040; }
+  .adw .row:last-child { border-bottom: 0; }
+  .adw .row .t { font-size: 14px; }
+  .adw .row .s { font-size: 12px; color: #ffffff90; }
+  .adw .ok { color: #8ff0a4; } .adw .warn { color: #f8e45c; } .adw .err { color: #ff7b63; }
+  .adw .mono { font-family: "Source Code Pro", ui-monospace, monospace; font-size: 11.5px; line-height: 1.5; color: #ddd; white-space: pre-wrap; }
+  .adw .summary { text-align: center; margin-bottom: 14px; }
+  .adw .summary .big { font-size: 20px; font-weight: 800; }
+  .spin { width: 16px; height: 16px; border: 2px solid #ffffff40; border-top-color: #fff; border-radius: 50%; animation: s 1s linear infinite; }
+  @keyframes s { to { transform: rotate(360deg); } }
+</style>
+</head>
+<body class="text-base-content">
+<main class="max-w-5xl mx-auto px-4 sm:px-8 py-10 space-y-12">
+
+<header class="space-y-3">
+  <div class="flex flex-wrap gap-2">
+    <span class="badge badge-soft badge-error">0.4.0 blocker</span>
+    <span class="badge badge-soft badge-info">Reviewed by Fable</span>
+    <span class="badge badge-soft">2026-10-23</span>
+  </div>
+  <h1 class="text-3xl sm:text-4xl font-black">Empty folders and backup progress</h1>
+  <p class="text-lg max-w-3xl">The real-account test of the setup wizard ended with <b>"Failed (exit 1)"</b> on the very first backup, only because the test laptop's <code>Pictures</code> folder was empty. That will happen to anyone with a fresh laptop, so it gets fixed before 0.4.0. Your second ask, a checklist instead of raw logs, is planned here too.</p>
+</header>
+
+<!-- WHAT HAPPENED -->
+<section class="space-y-5">
+  <h2 class="text-2xl font-bold">What happened</h2>
+  <div class="grid lg:grid-cols-2 gap-6 items-start">
+    <div class="adw">
+      <div class="hb"><span></span><div><div class="title">Back up now</div><div class="sub">Failed (exit 1)</div></div><span class="xbtn">✕</span></div>
+      <div class="body mono">INFO : hello.txt: Copied (new)
+INFO : notes/n1.md: Copied (new)
+documents rc=0
+pictures: refusing to sync: source …/a/Pictures is missing or empty (unmounted drive or typo?) — nothing was changed
+pictures rc=2
+INFO : id_test: Copied (new)
+ssh-keys rc=0
+manifest rc=0
+probe rc=0</div>
+    </div>
+    <ol class="space-y-3 list-decimal pl-5">
+      <li>The wizard offers every standard folder that <i>exists</i>, switched on (<code>setup.py:337</code> <code>suggest_folders</code>). An empty <code>Pictures</code> qualifies.</li>
+      <li>The engine refuses any job whose source has no files (<code>engine.py:220</code>, <code>has_files</code> at <code>:133</code>) with <code>rc=2</code>. That guard exists so an unplugged drive can't make the backup look empty and get mirrored as deletions.</li>
+      <li>One refused job makes the whole run "Failed". Documents, SSH key, manifest and passphrase probe all succeeded.</li>
+    </ol>
+  </div>
+</section>
+
+<!-- PART A -->
+<section class="space-y-5">
+  <div class="flex flex-wrap items-baseline gap-3">
+    <h2 class="text-2xl font-bold">A. Empty-folder fix</h2>
+    <span class="badge badge-error">ships in 0.4.0</span>
+  </div>
+  <p class="max-w-3xl">The engine tells "empty because nothing is here yet" apart from "empty because something went wrong" by also looking at the backup side. A job is only <b>skipped</b> when the folder exists, holds no files, <i>and</i> its backup copy is empty too. Syncing nothing over nothing can't lose data. Every other case keeps today's refusal.</p>
+
+  <div class="overflow-x-auto rounded-box border border-base-content/10 bg-base-100">
+    <table class="table">
+      <thead><tr><th>Source folder</th><th>Backup copy on Drive</th><th>Result</th><th>Why</th></tr></thead>
+      <tbody>
+        <tr><td>Has files</td><td>anything</td><td><span class="badge badge-success badge-soft">Backed up</span></td><td>Normal run, unchanged.</td></tr>
+        <tr class="bg-success/5"><td>Exists, empty</td><td>Missing or empty (<code>lsf</code> rc 3, or rc 0 with no output)</td><td><span class="badge badge-warning badge-soft">Skipped: nothing to back up yet</span></td><td><b>New.</b> Counts as OK, so the run reports success.</td></tr>
+        <tr><td>Exists, empty</td><td>Holds files</td><td><span class="badge badge-error badge-soft">Refused</span></td><td>Looks like an unmounted drive or wiped folder. Same as today.</td></tr>
+        <tr><td>Exists, empty</td><td>Can't tell (offline, auth error, any other rc)</td><td><span class="badge badge-error badge-soft">Refused</span></td><td>Fails closed. A listing error must never count as "empty" (Fable #1).</td></tr>
+        <tr><td>Missing</td><td>anything</td><td><span class="badge badge-error badge-soft">Refused</span></td><td>A typo'd path would otherwise be silently skipped forever.</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="grid md:grid-cols-3 gap-4">
+    <div class="card card-border bg-base-100"><div class="card-body p-5">
+      <h3 class="font-bold">Engine</h3>
+      <p class="text-sm">In <code>run_backup</code>: before refusing, list the destination (<code>rclone lsf &lt;dest&gt; --max-depth 1</code>). The job result gets <code>"skipped": true</code> with <code>rc 0</code>, so <code>status()</code> (<code>engine.py:367</code>), <code>last-run.json</code> and the Backups page can say "not backed up yet" instead of "OK" (Fable #2). The log line reads <code>pictures: skipped — folder is empty, nothing to back up yet</code>.</p>
+    </div></div>
+    <div class="card card-border bg-base-100"><div class="card-body p-5">
+      <h3 class="font-bold">Wizard</h3>
+      <p class="text-sm">Empty folders stay <b>on</b>, so photos added next month are backed up without revisiting settings. Their row subtitle becomes <i>"Empty — backed up once you add files"</i> (via <code>with_size</code>, <code>setup.py:372</code>), so the choice explains itself.</p>
+    </div></div>
+    <div class="card card-border bg-base-100"><div class="card-body p-5">
+      <h3 class="font-bold">Also in 0.4.0</h3>
+      <p class="text-sm">The Recovery Kit page scrolls (the separator line above "Set Up Backup"). Fix: add libadwaita's <code>compact</code> style to its <code>Adw.StatusPage</code> (<code>wizard.py:244</code>), the way <code>pages.py:70</code> already does.</p>
+    </div></div>
+  </div>
+
+  <div class="card bg-base-100 border border-base-content/10"><div class="card-body p-5 text-sm">
+    <h3 class="font-bold">Tests (written first)</h3>
+    <ul class="list-disc pl-5 space-y-1">
+      <li>empty source + missing dest → skipped, rc 0, run ok</li>
+      <li>empty source + non-empty dest → refused, rc 2, nothing synced</li>
+      <li>empty source + dest listing fails (rc 1) → refused, rc 2</li>
+      <li>missing source → refused, rc 2, no dest listing</li>
+      <li><code>status()</code> exposes <code>skipped</code>; suggest_folders' subtitle for size 0</li>
+    </ul>
+    <p class="mt-2">Then rerun the real-account test (fresh sandbox, empty <code>Pictures</code> kept on purpose). Done = the first backup reports success with Pictures skipped, and restore + check pass.</p>
+  </div></div>
+</section>
+
+<!-- PART B -->
+<section class="space-y-5">
+  <div class="flex flex-wrap items-baseline gap-3">
+    <h2 class="text-2xl font-bold">B. Checklist instead of raw logs</h2>
+    <span class="badge badge-info">0.4.1</span>
+  </div>
+  <p class="max-w-3xl">"Back up now" shows one row per folder. Each row goes from a spinner to a green tick, a yellow skip or a red cross, with a short plain-language result underneath. A two-button switch in the header bar, <b>Progress | Log</b>, flips between the checklist and the full rclone log. The log view has <b>Copy</b> and <b>Save Log…</b> buttons, so it can be pasted into an issue. Other commands (prune, restore) keep the plain log view.</p>
+
+  <div class="grid lg:grid-cols-2 gap-6 items-start">
+    <div>
+      <p class="text-sm font-semibold mb-2">While running</p>
+      <div class="adw">
+        <div class="hb"><span class="tbtn">Details</span><div><div class="title">Back up now</div><div class="sub">2 of 4</div></div><span class="xbtn" style="opacity:.35">✕</span></div>
+        <div class="body"><div class="boxed">
+          <div class="row"><span class="ok">✔</span><div class="flex-1"><div class="t">Documents</div><div class="s">Copied 2 files</div></div></div>
+          <div class="row"><span class="spin"></span><div class="flex-1"><div class="t">Pictures</div><div class="s">Backing up…</div></div></div>
+          <div class="row" style="opacity:.55"><span>○</span><div class="flex-1"><div class="t">SSH keys</div><div class="s">Waiting</div></div></div>
+          <div class="row" style="opacity:.55"><span>○</span><div class="flex-1"><div class="t">Finishing up</div><div class="s">Waiting</div></div></div>
+        </div></div>
+      </div>
+    </div>
+    <div>
+      <p class="text-sm font-semibold mb-2">Finished</p>
+      <div class="adw">
+        <div class="hb"><span class="tbtn">Details</span><div><div class="title">Back up now</div><div class="sub">Finished</div></div><span class="xbtn">✕</span></div>
+        <div class="body">
+          <div class="summary"><div class="big ok">✔ Backed up</div><div class="s" style="font-size:12px;color:#ffffff90">Just now · 3 files copied</div></div>
+          <div class="boxed">
+            <div class="row"><span class="ok">✔</span><div class="flex-1"><div class="t">Documents</div><div class="s">Copied 2 files</div></div></div>
+            <div class="row"><span class="warn">–</span><div class="flex-1"><div class="t">Pictures</div><div class="s">Nothing to back up yet</div></div></div>
+            <div class="row"><span class="ok">✔</span><div class="flex-1"><div class="t">SSH keys</div><div class="s">Copied 1 file</div></div></div>
+            <div class="row"><span class="ok">✔</span><div class="flex-1"><div class="t">Finishing up</div><div class="s">Manifest saved · passphrase check ready</div></div></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="grid lg:grid-cols-2 gap-6 items-start" data-lavish-revision="r1">
+    <div>
+      <p class="text-sm font-semibold mb-2">Failed: the error sits on the row that failed</p>
+      <div class="adw">
+        <div class="hb"><span class="flex"><span class="tbtn on" style="border-radius:6px 0 0 6px">Progress</span><span class="tbtn" style="border-radius:0 6px 6px 0;margin-left:1px">Log</span></span><div><div class="title">Back up now</div><div class="sub">Finished with problems</div></div><span class="xbtn">✕</span></div>
+        <div class="body">
+          <div class="summary"><div class="big err">✕ 1 folder not backed up</div><div class="s" style="font-size:12px;color:#ffffff90">The others are safe on Google Drive</div></div>
+          <div class="boxed">
+            <div class="row"><span class="ok">✔</span><div class="flex-1"><div class="t">Documents</div><div class="s">Copied 2 files</div></div></div>
+            <div class="row" style="flex-wrap:wrap;background:#ff7b6312"><span class="err">✕</span><div class="flex-1"><div class="t">Photos drive</div><div class="s">Folder is empty but its backup isn't. Is the drive plugged in? Nothing was changed.</div></div><span style="font-size:12px">▾</span>
+              <div class="mono" style="flex-basis:100%;margin:8px 0 0 28px;padding:8px 10px;background:#00000040;border-radius:8px">photos: refusing to sync: source /run/media/v/Photos is missing or empty — nothing was changed</div>
+              <div style="flex-basis:100%;margin:8px 0 0 28px;display:flex;gap:8px"><span class="tbtn">Copy Error</span><span class="tbtn">Show in Log</span></div>
+            </div>
+            <div class="row"><span class="ok">✔</span><div class="flex-1"><div class="t">SSH keys</div><div class="s">Already up to date</div></div></div>
+            <div class="row"><span class="ok">✔</span><div class="flex-1"><div class="t">Finishing up</div><div class="s">Manifest saved</div></div></div>
+          </div>
+          <div style="text-align:center;margin-top:14px"><span class="tbtn" style="background:#3584e4;padding:7px 18px;border-radius:999px;font-weight:700">Try Again</span></div>
+        </div>
+      </div>
+    </div>
+    <div>
+      <p class="text-sm font-semibold mb-2">Log view: the same run, unfiltered</p>
+      <div class="adw">
+        <div class="hb"><span class="flex"><span class="tbtn" style="border-radius:6px 0 0 6px">Progress</span><span class="tbtn on" style="border-radius:0 6px 6px 0;margin-left:1px">Log</span></span><div><div class="title">Back up now</div><div class="sub">Finished with problems</div></div><span class="xbtn">✕</span></div>
+        <div class="body mono" style="min-height:260px">INFO : hello.txt: Copied (new)
+INFO : notes/n1.md: Copied (new)
+documents rc=0
+<span class="err">photos: refusing to sync: source /run/media/v/Photos is missing or empty — nothing was changed
+photos rc=2</span>
+ssh-keys rc=0
+manifest rc=0</div>
+        <div style="display:flex;justify-content:center;gap:10px;padding:0 18px 16px"><span class="tbtn">Copy</span><span class="tbtn">Save Log…</span></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="overflow-x-auto rounded-box border border-base-content/10 bg-base-100" data-lavish-revision="r1">
+    <table class="table table-sm">
+      <thead><tr><th>Control</th><th>Where</th><th>What it does</th></tr></thead>
+      <tbody>
+        <tr><td><b>Progress | Log</b></td><td>Header bar, start</td><td>Two linked <code>Gtk.ToggleButton</code>s (one group) switching a <code>Gtk.Stack</code>. Works on libadwaita 1.5 (Ubuntu 24.04). <code>Adw.ToggleGroup</code> needs 1.7, so it's not used.</td></tr>
+        <tr><td>Failed row</td><td>Checklist</td><td>An <code>Adw.ExpanderRow</code> that opens by itself. It shows that job's error lines plus <b>Copy Error</b> and <b>Show in Log</b> (switches to Log and scrolls to the job).</td></tr>
+        <tr><td><b>Copy</b> / <b>Save Log…</b></td><td>Below the log</td><td>Copy the whole log to the clipboard; save it as <code>lifeboat-&lt;date&gt;.log</code> via <code>Gtk.FileDialog</code>. Same as the Recovery Kit's Save PDF… flow.</td></tr>
+        <tr><td><b>Try Again</b></td><td>Bottom, only on failure</td><td>Reruns "Back up now" in the same dialog.</td></tr>
+        <tr><td>Summary line</td><td>Top of Progress</td><td>"Backed up" / "N folders not backed up". Says the others are safe, so one failure doesn't read as "nothing worked".</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="grid md:grid-cols-2 gap-6">
+    <div class="space-y-2">
+      <h3 class="font-bold">How the window learns progress</h3>
+      <svg viewBox="0 0 460 170" class="w-full" role="img" aria-label="lifeboat run --events writes JSON lines on stdout and logs on stderr; the window reads both pipes">
+        <rect x="10" y="55" width="140" height="60" rx="10" fill="#e8eef9" stroke="#5b7bb5"/>
+        <text x="80" y="82" text-anchor="middle" font-size="13" font-weight="700" fill="#1f2d4d">lifeboat run</text>
+        <text x="80" y="100" text-anchor="middle" font-size="12" fill="#1f2d4d">--events</text>
+        <rect x="310" y="55" width="140" height="60" rx="10" fill="#eaf6ec" stroke="#4f9a5c"/>
+        <text x="380" y="82" text-anchor="middle" font-size="13" font-weight="700" fill="#1d4424">GTK window</text>
+        <text x="380" y="100" text-anchor="middle" font-size="12" fill="#1d4424">stream()</text>
+        <line x1="150" y1="70" x2="305" y2="70" stroke="#4f9a5c" stroke-width="2" marker-end="url(#a)"/>
+        <text x="228" y="62" text-anchor="middle" font-size="11" fill="#1d4424">stdout: JSON lines → checklist</text>
+        <line x1="150" y1="100" x2="305" y2="100" stroke="#999" stroke-width="2" stroke-dasharray="5 4" marker-end="url(#b)"/>
+        <text x="228" y="118" text-anchor="middle" font-size="11" fill="#555">stderr: rclone log → Details</text>
+        <text x="228" y="155" text-anchor="middle" font-size="11" fill="#555">job_start · job_end {name, rc, skipped, files} · done {ok}</text>
+        <defs>
+          <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10z" fill="#4f9a5c"/></marker>
+          <marker id="b" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10z" fill="#999"/></marker>
+        </defs>
+      </svg>
+      <p class="text-sm">Two separate pipes instead of today's merged one (<code>STDERR_MERGE</code>, <code>window.py:256</code>), so an rclone line that happens to start with <code>{</code> can never be mistaken for an event (Fable #5). <code>--json</code> already sends human output to stderr (<code>cli.py:30</code>), so this follows an existing convention. <code>--json</code> stays a single document at the end.</p>
+    </div>
+    <div class="space-y-2">
+      <h3 class="font-bold">Widgets</h3>
+      <ul class="text-sm list-disc pl-5 space-y-1">
+        <li><code>Adw.ActionRow</code> per job, plus one "Finishing up" row for manifest + probe.</li>
+        <li>Suffix: the existing <code>spinner()</code> (<code>widgets.py:22</code>), then a <code>Gtk.Image</code> with the <code>success</code> / <code>warning</code> / <code>error</code> style class.</li>
+        <li>The Log page is today's <code>TextView</code>, kept as-is and filled from stderr. On failure the dialog stays on Progress with the failed row expanded. It never drops you into the raw log.</li>
+        <li>"Copied N files" is counted from rclone's per-file <code>Copied</code> lines the engine already streams. 0 reads "Already up to date".</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<!-- PART C -->
+<section class="space-y-5" data-lavish-revision="r2">
+  <div class="flex flex-wrap items-baseline gap-3">
+    <h2 class="text-2xl font-bold">C. Say what happens next, and write a log people can read</h2>
+    <span class="badge badge-error">0.4.0, from the e2e run</span>
+  </div>
+  <p class="max-w-3xl">The real run worked, but it ended on a list of ticks with no way forward: no <b>Done</b>, nothing saying backups now run by themselves. The log mixed rclone's timestamps with bare <code>documents rc=0</code> lines, internal words (<i>probe</i>, <i>manifest</i>), and debug noise (<i>Set directory modification time</i>).</p>
+
+  <div class="grid lg:grid-cols-2 gap-6 items-start">
+    <div>
+      <p class="text-sm font-semibold mb-2">End of setup (opened by the wizard)</p>
+      <div class="adw">
+        <div class="hb"><span class="flex"><span class="tbtn on" style="border-radius:6px 0 0 6px">Progress</span><span class="tbtn" style="border-radius:0 6px 6px 0;margin-left:1px">Log</span></span><div><div class="title">First Backup</div><div class="sub">Finished</div></div><span class="xbtn">✕</span></div>
+        <div class="body">
+          <div class="summary"><div class="big ok">✔ You're All Set</div>
+            <div class="s" style="font-size:12.5px;color:#ffffffb0;margin-top:6px;line-height:1.5">3 files are safe on Google Drive.<br>Lifeboat backs up every day at 13:00 by itself. You don't need to keep it open.</div></div>
+          <div class="boxed">
+            <div class="row"><span class="ok">✔</span><div class="flex-1"><div class="t">Documents</div><div class="s">2 files backed up</div></div></div>
+            <div class="row"><span style="color:#ffffff70">–</span><div class="flex-1"><div class="t">Pictures</div><div class="s">Empty for now, backed up once you add files</div></div></div>
+            <div class="row"><span class="ok">✔</span><div class="flex-1"><div class="t">SSH keys</div><div class="s">1 file backed up, encrypted</div></div></div>
+          </div>
+          <div class="s" style="font-size:12px;color:#ffffffa0;text-align:center;margin-top:12px">🔑 Keep your recovery kit somewhere other than this laptop.</div>
+          <div style="text-align:center;margin-top:14px"><span class="tbtn" style="background:#3584e4;padding:7px 26px;border-radius:999px;font-weight:700">Done</span></div>
+        </div>
+      </div>
+    </div>
+    <div>
+      <p class="text-sm font-semibold mb-2">Any later "Back up now"</p>
+      <div class="adw">
+        <div class="hb"><span class="flex"><span class="tbtn on" style="border-radius:6px 0 0 6px">Progress</span><span class="tbtn" style="border-radius:0 6px 6px 0;margin-left:1px">Log</span></span><div><div class="title">Back Up Now</div><div class="sub">Finished</div></div><span class="xbtn">✕</span></div>
+        <div class="body">
+          <div class="summary"><div class="big ok">✔ Backed Up</div><div class="s" style="font-size:12.5px;color:#ffffffb0;margin-top:6px">3 files copied · next backup tomorrow at 13:00</div></div>
+          <div class="boxed">
+            <div class="row"><span class="ok">✔</span><div class="flex-1"><div class="t">Documents</div><div class="s">2 files backed up</div></div></div>
+            <div class="row"><span style="color:#ffffff70">–</span><div class="flex-1"><div class="t">Pictures</div><div class="s">Empty for now</div></div></div>
+            <div class="row"><span class="ok">✔</span><div class="flex-1"><div class="t">SSH keys</div><div class="s">Already up to date</div></div></div>
+          </div>
+          <div style="text-align:center;margin-top:14px"><span class="tbtn" style="background:#3584e4;padding:7px 26px;border-radius:999px;font-weight:700">Done</span></div>
+          <p style="font-size:11.5px;color:#ffffff80;text-align:center;margin-top:10px">On failure: <b>Try Again</b> (suggested) + <b>Close</b>, and the summary says what to do.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <ul class="text-sm list-disc pl-5 space-y-1 max-w-3xl">
+    <li>Every finished state ends in one obvious button: <b>Done</b> when it worked, <b>Try Again</b> + <b>Close</b> when it didn't. This follows GNOME's "always offer the next step" pattern (Software's install sheet, Settings' online-accounts sign-in).</li>
+    <li>The summary says what happens next: the next automatic backup time comes from <code>schedule.daily_at</code> and the daily timer that setup installs.</li>
+    <li>"Finishing up" drops off the success list. It's housekeeping and only shows when it fails ("Couldn't save the backup list on Google Drive").</li>
+    <li>Title Case for dialog titles ("Back Up Now", "First Backup"), as GNOME's HIG asks.</li>
+  </ul>
+
+  <h3 class="font-bold text-lg pt-2">The log, before and after</h3>
+  <div class="grid lg:grid-cols-2 gap-6 items-start">
+    <div class="adw"><div class="body mono">2026/10/23 19:20:54 INFO  : hello.txt: Copied (new)
+2026/10/23 19:20:56 INFO  : notes/n1.md: Copied (new)
+2026/10/23 19:20:57 INFO  : notes: Set directory modification time (using DirSetModTime)
+documents rc=0
+pictures: skipped — folder is empty, nothing to back up yet
+pictures rc=0
+2026/10/23 19:21:19 INFO  : id_test: Copied (new)
+ssh-keys rc=0
+manifest rc=0
+probe rc=0</div></div>
+    <div class="adw"><div class="body mono">Lifeboat 0.4.0 · backup of geass-rog · Thu 23 Oct 2026 19:20:52
+
+19:20:52  Documents   ~/Documents → Google Drive: Lifeboat/geass-rog/Documents
+19:20:54  Documents   copied   hello.txt (new, 46 B)
+19:20:56  Documents   copied   notes/n1.md (new, 7 B)
+19:20:57  Documents   <span class="ok">done      2 files, 53 B, 5 s</span>
+
+19:20:57  Pictures    ~/Pictures → Google Drive: Lifeboat/geass-rog/Pictures
+19:20:58  Pictures    <span style="color:#ffffff90">skipped   folder is empty, nothing to back up yet</span>
+
+19:20:58  SSH keys    ~/.ssh → Google Drive: Lifeboat/geass-rog/keys (encrypted)
+19:21:19  SSH keys    copied   id_test (new, 17 B)
+19:21:19  SSH keys    <span class="ok">done      1 file, 17 B, 21 s</span>
+
+19:21:20  Lifeboat    saved the list of backed-up folders
+19:21:21  Lifeboat    passphrase check file is in place
+
+19:21:21  <span class="ok">Finished: backed up 3 files in 29 s</span></div></div>
+  </div>
+  <ul class="text-sm list-disc pl-5 space-y-1 max-w-3xl">
+    <li>The engine runs rclone with <code>--use-json-log</code> (checked locally on rclone 1.74.3: each line carries <code>level</code>, <code>msg</code>, <code>object</code>, <code>size</code>, plus a final <code>stats</code> record). It rewrites each line into one format: <code>time · folder · what · detail</code>. Counts come from rclone's own <code>stats.transfers</code> instead of counting "Copied" lines.</li>
+    <li>Dropped: directory-mtime lines and the per-job <code>rc=</code> lines. Errors keep rclone's full text, marked <code>ERROR</code>.</li>
+    <li>The same format goes everywhere the log appears: the Log tab, <code>run.log</code>, and <code>lifeboat run</code> in a terminal. <code>--json</code> and <code>--events</code> are unchanged.</li>
+  </ul>
+</section>
+
+<!-- PART D -->
+<section class="space-y-4" data-lavish-revision="r2">
+  <div class="flex flex-wrap items-baseline gap-3">
+    <h2 class="text-2xl font-bold">D. A proper sign-in page in the browser</h2>
+    <span class="badge badge-error">0.4.0</span>
+  </div>
+  <p class="max-w-3xl">After Google sign-in the browser lands on rclone's bare page: <i>"Success! All done. Please go back to rclone."</i> The user never heard of rclone. <code>rclone authorize</code> takes <code>--template &lt;file&gt;</code> (a Go template, confirmed in <code>rclone authorize --help</code>), so Lifeboat ships its own page and passes it in <code>setup.py:136</code>.</p>
+  <div class="grid md:grid-cols-2 gap-6">
+    <div class="rounded-box border border-base-content/10 overflow-hidden" style="background:#fafafa">
+      <div style="min-height:260px;display:grid;place-items:center;padding:24px;font-family:Cantarell,Inter,system-ui,sans-serif">
+        <div style="text-align:center;max-width:340px">
+          <div style="width:64px;height:64px;margin:0 auto 14px;border-radius:16px;background:linear-gradient(#5b9bf0,#2a6fd6);display:grid;place-items:center;color:#fff;font-size:30px">⛵</div>
+          <div style="font-size:22px;font-weight:800;color:#222">You're Signed In</div>
+          <div style="font-size:14px;color:#555;margin-top:8px;line-height:1.5">Lifeboat can now reach your Google Drive. Go back to Lifeboat to finish. You can close this tab.</div>
+          <div style="font-size:12px;color:#888;margin-top:16px">✓ Connected to Google Drive</div>
+        </div>
+      </div>
+    </div>
+    <ul class="text-sm list-disc pl-5 space-y-1">
+      <li>Centered card: the Lifeboat icon (inline SVG from <code>data/io.github.xixas.Lifeboat.svg</code>), a title, one line on what to do next. Light and dark follow the system.</li>
+      <li>Failure variant: <i>"Sign-in Didn't Work"</i>, rclone's error name and description in small text, <i>"Go back to Lifeboat and try again."</i></li>
+      <li>Self-contained: inline CSS and SVG, no web fonts, no external requests. The page is served from <code>127.0.0.1</code>.</li>
+      <li>Shipped inside the Python package, so <code>install.sh</code>, the tarball and the RPM all carry it. A test renders the template through rclone's own Go template parser to catch syntax errors.</li>
+    </ul>
+  </div>
+</section>
+
+<!-- RISKS -->
+<section class="space-y-4">
+  <h2 class="text-2xl font-bold">Risks and what's parked</h2>
+  <div class="grid md:grid-cols-2 gap-4">
+    <div role="alert" class="alert alert-soft alert-warning items-start"><div><b>Wrong passphrase looks empty.</b> A crypt destination listed with the wrong passphrase returns rc 0 and no names. Worst case is a false "Nothing to back up yet" for an empty folder. Nothing is synced, so no data is lost. The passphrase probe in the same run still flags the real problem.</div></div>
+    <div role="alert" class="alert alert-soft alert-info items-start"><div><b>Parked, not new:</b> <code>has_files</code> ignores a job's excludes. A folder holding only excluded files still syncs and moves the whole backup into the "old versions" folder. It can be recovered for <code>keep_days</code>. This is tracked as a follow-up, not part of 0.4.0.</div></div>
+  </div>
+</section>
+
+<!-- DECISIONS -->
+<section class="space-y-4" data-lavish-revision="r1">
+  <h2 class="text-2xl font-bold">Decided</h2>
+  <div class="overflow-x-auto rounded-box border border-base-content/10 bg-base-100">
+    <table class="table">
+      <tbody>
+        <tr><td><b>Scope</b></td><td>Part A + Recovery Kit fix in 0.4.0. Checklist (Part B) in 0.4.1.</td></tr>
+        <tr><td><b>Empty folders</b></td><td>On by default, subtitle "Empty — backed up once you add files".</td></tr>
+        <tr><td><b>Status</b></td><td>Part A in progress on branch <code>fix/empty-folders</code>. Fable reviews before merge, then the real-account test reruns.</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+</main>
+</body>
+</html>

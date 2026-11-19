@@ -1,5 +1,37 @@
 # Changelog
 
+## [0.5.0](https://github.com/xixas/lifeboat/compare/v0.4.0...v0.5.0) (2026-11-19)
+
+
+### Features
+
+* **app:** add Find more to back up on the Backups page ([f8ba66c](https://github.com/xixas/lifeboat/commit/f8ba66ca6211190af4360eb98d07542c7d1e0cd2))
+* **app:** alert on Overview for dropped sources and new items found ([c9fad48](https://github.com/xixas/lifeboat/commit/c9fad4832d8a61466d02f817cffdb68ce1be833d))
+* **app:** group the wizard's folders by catalogue group with ignore and restore ([d0bff4e](https://github.com/xixas/lifeboat/commit/d0bff4e4b343b8f12bb6c45388bbfbeb5ab3d9b9))
+* **catalogue:** add a gtk-free catalogue and scan, and make suggest_folders use it ([362bd52](https://github.com/xixas/lifeboat/commit/362bd52ce87315030a5f82ca85dbd80d394ed98b))
+* **cli:** add scan, ignore, unignore and add-job --links ([7c8613c](https://github.com/xixas/lifeboat/commit/7c8613c7e729c705dcab5a42c425dce55ac2b928))
+* **config:** add a scan ignore list and mark ignored items in scan ([9f6abc4](https://github.com/xixas/lifeboat/commit/9f6abc4f549cd808c415b3d55bf4e11c39835c6f))
+* **engine:** add links job key to store symlinks instead of following them ([5656ef6](https://github.com/xixas/lifeboat/commit/5656ef689dd3be345c4a3ccf3a53e8069cf9ac19))
+* **engine:** alert when a folder or file stops being backed up ([fa19b41](https://github.com/xixas/lifeboat/commit/fa19b41f8c68e6b684c2d9cffd2e926f339f56b4))
+* **found:** add gtk-free helpers for grouping, adding and ignoring catalogue items ([2a225ef](https://github.com/xixas/lifeboat/commit/2a225ef0e8714f07a67b9b23c1358c03ab0aa23b))
+* **setup:** build jobs from catalogue items and group single files into home-files ([7366bf6](https://github.com/xixas/lifeboat/commit/7366bf69e7d410771977ed1655b737c0755205f3))
+* **skills:** say whether your own skills are backed up, with an Add to Backup fix ([7723cc1](https://github.com/xixas/lifeboat/commit/7723cc1156bf2bdf70a84af4ee0732d775222e3b))
+
+
+### Bug Fixes
+
+* **app:** skip sizes for single files and flag the Skills page when your skills are not backed up ([19c408b](https://github.com/xixas/lifeboat/commit/19c408b6915a9245af45cfc5466256efe790cefe))
+* **catalogue:** anchor the agent excludes so a skill named debug is still backed up ([78e8b09](https://github.com/xixas/lifeboat/commit/78e8b091b0de2164454208561a646d016e570b2d))
+* **catalogue:** encrypt VS Code settings and exclude extension state, history and agent indexes ([8b3ffb6](https://github.com/xixas/lifeboat/commit/8b3ffb60fcbcae646cafdb1c8e87ebba8ed20256))
+* **catalogue:** label linked folders by name and show the link count under the path ([326dd37](https://github.com/xixas/lifeboat/commit/326dd378cbed990e2e1962605f5be86b7996e0f4))
+* **catalogue:** label the .claude folder Claude Code ([8f3e2ef](https://github.com/xixas/lifeboat/commit/8f3e2ef6ab31edc3fa1a7a2a91b7d5e163c0c970))
+* **engine:** compare coverage sources after expanding ~ and normalising the path ([f7fc0f2](https://github.com/xixas/lifeboat/commit/f7fc0f24ea3b6a7b6cc1b6c0a8dba9cccfb889b6))
+* **engine:** do not call the laptop fully covered while a dropped source is unacknowledged ([8bcc4df](https://github.com/xixas/lifeboat/commit/8bcc4dfbbcb223d82a10df0419d52267f2ea47cd))
+* **found:** tell an upgrader about uncovered items; the wizard marks what it showed as seen ([e5bd670](https://github.com/xixas/lifeboat/commit/e5bd670ca0f0aff96a12e105022effaa5d46a175))
+* **manifest:** carry include, exclude, links and filter_file through the manifest and refuse a bare ~ job ([8ed74a0](https://github.com/xixas/lifeboat/commit/8ed74a0ad7e526a71469a0a8050b6b8110c0debe))
+* **setup:** give folders with the same name unique job names and destinations ([f916107](https://github.com/xixas/lifeboat/commit/f916107b685e64af01fd7bb35e3ee244bb81b112))
+* **setup:** refuse a whole-home job only when restoring, so hand-written configs keep loading ([2dc43b3](https://github.com/xixas/lifeboat/commit/2dc43b3a98965a2fbb66e856d0144f9518d83b6b))
+
 ## [0.4.0](https://github.com/xixas/lifeboat/compare/v0.3.2...v0.4.0) (2026-10-26)
 
 

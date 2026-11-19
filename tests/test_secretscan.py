@@ -497,6 +497,20 @@ def test_the_hook_falls_back_to_path_when_the_absolute_path_is_gone(repo, tmp_pa
 
 def test_without_a_lifeboat_executable_the_hook_runs_this_python_with_dash_m(repo, monkeypatch):
     monkeypatch.setattr(secretscan.shutil, "which", lambda name: None)
-    assert _REAL_CMD() == [sys.executable, "-m", "lifeboat"]
+    assert _REAL_CMD() == [sys.executable, "-I", "-m", "lifeboat"]
     monkeypatch.setattr(secretscan, "_lifeboat_cmd", _REAL_CMD)
-    assert f"{sys.executable} -m lifeboat" in install(repo).read_text()
+    assert f"{sys.executable} -I -m lifeboat" in install(repo).read_text()
+
+
+def test_a_lifeboat_folder_in_the_pushed_repo_is_never_run_by_the_hook(repo, tmp_path, monkeypatch):
+    marker = tmp_path / "ran"
+    (repo / "lifeboat").mkdir()
+    (repo / "lifeboat" / "__init__.py").write_text("")
+    (repo / "lifeboat" / "__main__.py").write_text(f"open({str(marker)!r}, 'w').write('x')\nprint('lifeboat-secret-scan-1')\n")
+    monkeypatch.setattr(secretscan.shutil, "which", lambda name: None)
+    monkeypatch.setattr(secretscan, "_lifeboat_cmd", _REAL_CMD)  # the python -m fallback
+    hook = install(repo)
+    head = commit(repo, {"a.md": "fine\n"})
+    env = dict(os.environ, PATH=str(_BIN), PYTHONPATH="")
+    subprocess.run([str(hook), "origin", "x"], input=_push_line(head), capture_output=True, text=True, cwd=repo, env=env)
+    assert not marker.exists()

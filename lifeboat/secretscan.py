@@ -221,9 +221,9 @@ exit 0
 
 
 def _lifeboat_cmd() -> list[str]:
-    """How the hook runs Lifeboat, fixed at install time: the absolute path of this machine's `lifeboat`, else this Python with -m."""
+    """How the hook runs Lifeboat, fixed at install time: the absolute path of this machine's `lifeboat`, else this Python in isolated mode (-I: ignores the cwd, which is the pushed repo, and PYTHON* variables)."""
     exe = shutil.which("lifeboat")
-    return [os.path.abspath(exe)] if exe else [sys.executable, "-m", "lifeboat"]
+    return [os.path.abspath(exe)] if exe else [sys.executable, "-I", "-m", "lifeboat"]  # -I: not the pushed repo (the cwd) nor PYTHON* env
 
 
 def hook_text() -> str:

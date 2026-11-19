@@ -805,6 +805,19 @@ def test_a_source_that_disappears_from_the_config_is_reported_dropped_until_ackn
     assert engine.problems(cfg, engine.status(cfg)) == []
 
 
+def test_a_dropped_source_stops_the_verdict_saying_fully_covered(tmp_path, make_cfg, clock):
+    cfg = make_cfg()
+    (tmp_path / "src" / "a").write_text("a")
+    engine.run_backup(cfg, now=datetime.now())
+    assert engine.status(cfg)["verdict"]["title"] == "Fully covered"
+    engine.write_json("coverage.json", {"sources": [], "dropped": ["~/gone"]})
+    st = engine.status(cfg)
+    assert st["verdict"] == {"title": "Partly covered", "weakest": "Something you backed up before is no longer included."}
+    assert st["status"]["overview"] == "warn"
+    engine.ack_dropped()
+    assert engine.status(cfg)["verdict"]["title"] == "Fully covered"
+
+
 def test_ack_dropped_can_forget_just_some_sources(env):
     engine.write_json("coverage.json", {"sources": [], "dropped": ["~/a", "~/b", "~/c"]})
     engine.ack_dropped(["~/a", "~/c"])

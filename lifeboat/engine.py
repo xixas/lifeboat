@@ -590,6 +590,8 @@ def _verdict(d: dict) -> None:
         weakest = "Only a dry run has happened; no real backup yet."
     else:
         weakest = f"The last backup is more than {STALE_DAYS} days old."
+    if d["dropped"] and title == "Fully covered":
+        title, weakest, s["overview"] = "Partly covered", "Something you backed up before is no longer included.", "warn"
     d["status"] = s
     d["verdict"] = {"title": title, "weakest": weakest}
 

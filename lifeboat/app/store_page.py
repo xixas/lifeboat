@@ -108,6 +108,7 @@ class StoreSetup(AccountDialog):
         self.remote = None  # github.com URL of the store, once known
         self.picked = None
         self.cands = []
+        self.existing = None  # the folder skillshare already uses, from an earlier or interrupted setup
         self.nav.add(self._install_page())
         self._run_install()
 
@@ -125,7 +126,7 @@ class StoreSetup(AccountDialog):
         def work():
             if store_install.skillshare_path() is None:
                 store_install.install()
-            return catalogue.scan(Path.home())
+            return catalogue.scan(Path.home()), store.current()
         self.win.in_thread(work, self._installed, lambda e: self._install_failed(e))
 
     def _install_failed(self, e):
@@ -137,20 +138,26 @@ class StoreSetup(AccountDialog):
         sp.set_child(vbox(pill("Close", self.force_close, suggested=False)))
         self.install_page.toolbar.set_content(sp)
 
-    def _installed(self, items):
+    def _installed(self, res):
         if self.dead:
             return
+        items, self.existing = res
         self.cands = store.candidates(items)
         self.push(self._pick_page())
 
     # -- 2. pick the store
     def _pick_page(self):
         pg = Adw.PreferencesPage()
-        g = Adw.PreferencesGroup(title="Step 2 of 3", description="Where do your skills live? Existing skills are never moved or replaced.")
         leader = Gtk.CheckButton(visible=False)
-        self.picked = self.cands[0]["path"] if self.cands else None
-        options = [(c["path"], f"{tilde(c['path'])} · {c['skills']} skills", "Found from your skill links") for c in self.cands]
-        options.append((None, "Start a new store", "~/.config/skillshare"))
+        if self.existing:  # skillshare is already set up: carry on with its folder, a second init would fail
+            g = Adw.PreferencesGroup(title="Step 2 of 3", description=GLib.markup_escape_text(f"skillshare already uses {tilde(self.existing)}"))
+            self.picked = self.existing
+            options = [(self.existing, tilde(self.existing), "Existing skillshare folder")]
+        else:
+            g = Adw.PreferencesGroup(title="Step 2 of 3", description="Where do your skills live? Existing skills are never moved or replaced.")
+            self.picked = self.cands[0]["path"] if self.cands else None
+            options = [(c["path"], f"{tilde(c['path'])} · {c['skills']} skills", "Found from your skill links") for c in self.cands]
+            options.append((None, "Start a new store", "~/.config/skillshare"))
         for path, title, sub in options:
             r = Adw.ActionRow(title=title, subtitle=sub, use_markup=False)
             c = Gtk.CheckButton(valign=Gtk.Align.CENTER)

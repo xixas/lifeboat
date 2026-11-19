@@ -310,12 +310,14 @@ def test_prepare_stops_when_init_fails(tmp_path, monkeypatch):
     assert r["ok"] is False and "boom" in r["error"] and not (tmp_path / "r" / ".git" / "hooks" / "pre-push").exists()
 
 
-def test_prepare_a_new_store_uses_the_folder_skillshare_reports(tmp_path, fake_ss, monkeypatch):
-    p, log = fake_ss
-    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "c"))
+def test_prepare_a_new_store_uses_the_folder_skillshare_reports(tmp_path, monkeypatch):
+    log = tmp_path / "argv.log"
     new = _repo(tmp_path / "newstore")
-    (tmp_path / "c" / "skillshare").mkdir(parents=True)
-    (tmp_path / "c" / "skillshare" / "config.yaml").write_text(f"sources:\n  skills: {new}\n")
+    cfg = tmp_path / "c" / "skillshare" / "config.yaml"
+    p = tmp_path / "skillshare"  # like the real one, `init` is what writes its config
+    p.write_text(f'#!/bin/sh\necho "$*" >> {log}\ncase "$1" in init) mkdir -p {cfg.parent}; printf "sources:\\n  skills: {new}\\n" > {cfg};; esac\n')
+    p.chmod(0o755)
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "c"))
     r = store.prepare(None, binary=p)
     assert r["ok"] and r["source"] == str(new) and "--git" in log.read_text()
     assert (new / ".git" / "hooks" / "pre-push").is_file()
@@ -358,3 +360,35 @@ def test_a_secret_in_an_unpushed_commit_blocks_even_if_the_next_commit_removes_i
     body = next(p["body"] for p in probs if p["page"] == "store")
     assert f"unpushed commit {sha}" in body
     assert f"git -C {source} reset --soft origin/main" in body and "commit again" in body
+
+
+def _skillshare_config(tmp_path, monkeypatch, source):
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "c"))
+    (tmp_path / "c" / "skillshare").mkdir(parents=True)
+    (tmp_path / "c" / "skillshare" / "config.yaml").write_text(f"sources:\n  skills: {source}\n")
+
+
+def test_setup_can_be_resumed_a_second_init_is_not_run(tmp_path, fake_ss, monkeypatch):
+    """Close after step 2 and reopen: skillshare is already initialised and its second `init` would exit 1."""
+    p, log = fake_ss
+    repo = _repo(tmp_path / "claude-config")
+    _skillshare_config(tmp_path, monkeypatch, repo)
+    r = store.prepare(repo, binary=p)
+    assert r == {"ok": True, "error": "", "source": str(repo)}
+    cmds = [ln.split("|", 1)[1].strip() for ln in log.read_text().splitlines()]
+    assert cmds == ["updates off"] and (repo / ".git" / "hooks" / "pre-push").is_file()
+
+
+def test_resuming_a_new_store_uses_the_folder_skillshare_already_has(tmp_path, fake_ss, monkeypatch):
+    p, log = fake_ss
+    repo = _repo(tmp_path / "newstore")
+    _skillshare_config(tmp_path, monkeypatch, repo)
+    r = store.prepare(None, binary=p)
+    assert r["ok"] and r["source"] == str(repo) and "init" not in log.read_text()
+
+
+def test_a_different_pick_than_the_existing_skillshare_source_is_refused(tmp_path, fake_ss, monkeypatch):
+    p, log = fake_ss
+    _skillshare_config(tmp_path, monkeypatch, tmp_path / "other")
+    r = store.prepare(_repo(tmp_path / "picked"), binary=p)
+    assert r["ok"] is False and f"skillshare already uses {tmp_path / 'other'}" in r["error"] and not log.exists()

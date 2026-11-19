@@ -168,8 +168,11 @@ def github_repo(url: str | None) -> str | None:
 def prepare(repo: Path | str | None, binary: Path | str | None = None, home: Path | str | None = None) -> dict:
     """Adopt `repo` (or create a new store when None), turn skillshare's online update check off and install the pre-push
     check. {ok, error, source}; stops at the first step that fails."""
-    out = init_adopt(repo, binary, home) if repo else init_new(binary, home)
-    out["source"] = str(repo) if repo else current()
+    existing = current()  # a second `skillshare init` exits 1, so an interrupted setup carries on from here
+    if existing and repo and os.path.realpath(existing) != os.path.realpath(str(repo)):
+        return {"ok": False, "error": f"skillshare already uses {existing}", "source": existing}
+    out = {"ok": True, "error": "", "source": existing} if existing else init_adopt(repo, binary, home) if repo else init_new(binary, home)
+    out["source"] = out["source"] if existing else str(repo) if repo else current()
     if not out["ok"]:
         return out
     if not store_install.disable_update_check(binary, home):

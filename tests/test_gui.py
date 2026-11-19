@@ -1411,6 +1411,22 @@ dlg.force_close()
 pump(timeout=0.3)
 
 store_install.install = lambda dest_dir=None: installed.append(1)
+
+# an interrupted setup: skillshare already uses a folder, so the pick step offers just that and Continue still works
+store.current = lambda: str(repo)
+dlg = store_page.StoreSetup(win)
+dlg.present(win)
+assert pump(lambda: dlg.nav.get_visible_page().get_tag() == "pick")
+assert any("skillshare already uses" in t for t in labels(dlg.get_child())), labels(dlg.get_child())
+assert dlg.picked == str(repo)
+shot("6c-store-pick-existing-source", dlg.get_child())
+click(dlg.get_child(), "Continue")
+assert pump(lambda: dlg.nav.get_visible_page().get_tag() == "connect")
+dlg.force_close()
+pump(timeout=0.3)
+store.current = lambda: None
+installed.clear()
+
 dlg = store_page.StoreSetup(win)
 dlg.present(win)
 tagd = lambda: dlg.nav.get_visible_page().get_tag()

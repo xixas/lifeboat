@@ -818,6 +818,20 @@ def test_a_dropped_source_stops_the_verdict_saying_fully_covered(tmp_path, make_
     assert engine.status(cfg)["verdict"]["title"] == "Fully covered"
 
 
+def test_rewriting_a_source_with_or_without_tilde_is_not_a_dropped_source(tmp_path, make_cfg, clock, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    cfg = make_cfg()
+    (tmp_path / "src" / "a").write_text("a")
+    cfg.jobs[0].source = "~/src"
+    engine.run_backup(cfg, now=clock())
+    cfg.jobs[0].source = f"{tmp_path}/src/"  # same folder, written differently
+    engine.run_backup(cfg, now=clock(5))
+    assert engine.dropped_sources() == []
+    cfg.jobs[0].source = f"{tmp_path}/./src"
+    engine.run_backup(cfg, now=clock(9))
+    assert engine.dropped_sources() == []
+
+
 def test_ack_dropped_can_forget_just_some_sources(env):
     engine.write_json("coverage.json", {"sources": [], "dropped": ["~/a", "~/b", "~/c"]})
     engine.ack_dropped(["~/a", "~/c"])

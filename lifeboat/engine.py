@@ -387,8 +387,14 @@ def coverage_sources(cfg: Config) -> list[str]:
     return list(dict.fromkeys(out))
 
 
+def _norm(path: str) -> str:
+    return os.path.normpath(os.path.expanduser(path))
+
+
 def _covered(path: str, sources: list[str]) -> bool:
-    return any(path == s or path.startswith(s.rstrip("/") + "/") for s in sources)
+    """Whether path is one of the sources or under one, however each was written (~, trailing slash, ./)."""
+    path = _norm(path)
+    return any(path == s or path.startswith(s.rstrip("/") + "/") for s in map(_norm, sources))
 
 
 def update_coverage(cfg: Config) -> dict:

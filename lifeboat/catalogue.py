@@ -117,7 +117,7 @@ def _linked_items(home: Path, agents: list[dict]) -> list[dict]:
                 continue
             if (root := _link_root(target, home.resolve())) is not None:
                 roots[root] = roots.get(root, 0) + 1
-    return [{**_item("linked-" + re.sub(r"[^a-z0-9]+", "-", str(r).lower()).strip("-"), f"Linked: {r}", "ai", r, "dir", True,
+    return [{**_item("linked-" + re.sub(r"[^a-z0-9]+", "-", str(r).lower()).strip("-"), f"Linked: {r.name}", "ai", r, "dir", True,
                      links=True), "link_count": n} for r, n in sorted(roots.items())]
 
 

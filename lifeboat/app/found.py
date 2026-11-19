@@ -10,7 +10,7 @@ from gi.repository import Adw, GLib, Gtk  # noqa: E402
 
 from lifeboat import catalogue, found  # noqa: E402
 from lifeboat.app.widgets import spinner  # noqa: E402
-from lifeboat.app.wizard_state import tilde  # noqa: E402
+from lifeboat.app.wizard_state import path_text  # noqa: E402
 from lifeboat.config import ConfigError, load_config  # noqa: E402
 from lifeboat.found import grouped  # noqa: E402
 
@@ -84,7 +84,7 @@ class FoundList:
 
     def _ignored_row(self, item):
         if item["path"] not in self.ignored_rows:
-            row = Adw.ActionRow(title=item["label"], subtitle=tilde(item["path"]), use_markup=False)
+            row = Adw.ActionRow(title=item["label"], subtitle=path_text(item), use_markup=False)
             btn = Gtk.Button(label="Restore", valign=Gtk.Align.CENTER, css_classes=["flat"])
             btn.connect("clicked", lambda *_: self._restore(item))
             row.add_suffix(btn)
@@ -161,7 +161,7 @@ class FoundDialog(Adw.Dialog):
 
     def _make_row(self, item):
         on = self.covered[item["path"]]
-        row = Adw.SwitchRow(title=item["label"], subtitle=tilde(item["path"]) + (" · already backed up" if on else ""), active=on,
+        row = Adw.SwitchRow(title=item["label"], subtitle=path_text(item) + (" · already backed up" if on else ""), active=on,
                             sensitive=not on, use_markup=False)
         row.connect("notify::active", lambda r, _p: self._toggled(item, r))
         return row
@@ -174,7 +174,7 @@ class FoundDialog(Adw.Dialog):
         path = self.win.cfg.path
 
         def done(job):
-            row.set_subtitle(f"{tilde(item['path'])} · added, backed up from the next run")
+            row.set_subtitle(f"{path_text(item)} · added, backed up from the next run")
             self.toasts.add_toast(Adw.Toast.new(f"Added {item['label']} to your backup"))
             self.win.refresh()
 

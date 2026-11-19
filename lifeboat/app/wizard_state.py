@@ -151,3 +151,9 @@ class Choices:
 
     def can_continue(self) -> bool:
         return bool(self.selected())
+
+
+def path_text(item: dict) -> str:
+    """An item's folder as shown under its title: '~/work/skills-repo · 3 linked skills' for a linked checkout."""
+    n = item.get("link_count")
+    return tilde(item["path"]) + (f" · {n} linked skill{'s' if n != 1 else ''}" if n else "")

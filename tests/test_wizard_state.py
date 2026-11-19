@@ -9,6 +9,7 @@ from lifeboat.app.wizard_state import (
     folders_text,
     job_label,
     keep_backing_up_default,
+    path_text,
     same_laptop_backup,
     since_text,
     tilde,
@@ -140,3 +141,9 @@ def test_ignored_choices_are_never_selected_and_come_back_on_restore():
     c.unignore("/h/Documents")
     c.unignore("/h/.ssh")
     assert [f["key"] for f in c.selected()] == ["documents", "ssh"] and c.ignored_keys() == []
+
+
+def test_path_text_adds_the_link_count():
+    assert path_text({"path": "/nowhere/x"}) == "/nowhere/x"
+    assert path_text({"path": "/nowhere/x", "link_count": 3}).endswith(" · 3 linked skills")
+    assert path_text({"path": "/nowhere/x", "link_count": 1}).endswith(" · 1 linked skill")

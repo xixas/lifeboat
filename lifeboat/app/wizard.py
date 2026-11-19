@@ -18,8 +18,8 @@ from lifeboat.app.wizard_state import (  # noqa: E402
     daily_times,
     fmt_size,
     folders_text,
+    path_text,
     same_laptop_backup,
-    tilde,
     validate_device_name,
 )
 from lifeboat.config import ConfigError, config_path, load_config  # noqa: E402
@@ -156,7 +156,7 @@ class SetupWizard(AccountDialog):
             self._measure(f)
 
     def _make_row(self, f, measure=True, removable=False):
-        sub = tilde(f["path"])
+        sub = path_text(f)
         if measure:
             sub = f"{sub} · {self.sizes.get(f['path']) or fmt_size(None, False)}"
         row = Adw.SwitchRow(title=f["label"], subtitle=sub, active=self.choices.is_on(f["path"]), use_markup=False)
@@ -188,7 +188,7 @@ class SetupWizard(AccountDialog):
                 return
             self.choices.set_size(path, size, complete)
             self.sizes[path] = self.choices.hint(path) or fmt_size(size, complete)
-            row.set_subtitle(f"{tilde(path)} · {self.sizes[path]}")
+            row.set_subtitle(f"{path_text(f)} · {self.sizes[path]}")
             if row.get_active() != self.choices.is_on(path):
                 self._silent = True  # a size-driven change must not count as a user toggle
                 row.set_active(self.choices.is_on(path))

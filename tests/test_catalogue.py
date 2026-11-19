@@ -63,7 +63,7 @@ def test_symlinks_leaving_an_agent_folder_become_linked_roots(fake_home):
     by_path = {i["path"]: i for i in linked}
     assert set(by_path) == {str(repo), str(loose)}
     git = by_path[str(repo)]
-    assert git["label"] == f"Linked: {repo}" and git["link_count"] == 2 and git["kind"] == "dir"
+    assert git["label"] == f"Linked: {repo.name}" and git["link_count"] == 2 and git["kind"] == "dir"
     assert (git["group"], git["secret"], git["default_on"], git["links"]) == ("ai", True, True, True)
     assert by_path[str(loose)]["link_count"] == 1
     assert len({i["key"] for i in linked}) == 2

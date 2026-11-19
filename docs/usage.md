@@ -84,9 +84,9 @@ point `--to` at it. In the app, use the Restore page.
 ## Config store
 
 The config store keeps your AI skills in a git repo on GitHub (a [skillshare](https://github.com/runkids/skillshare) source
-folder), pushed once a day after the backup jobs, or from **Push now** in the app.
+folder), pushed once a day after the backup jobs, or from **Upload now** in the app.
 
-**Setup** (the Config store page): Lifeboat downloads two pinned tools into `~/.local/share/lifeboat/bin/`, skillshare 0.30.11 and
+**Setup** (the Skills on GitHub page): Lifeboat downloads two pinned tools into `~/.local/share/lifeboat/bin/`, skillshare 0.30.11 and
 gitleaks 8.30.1, each checked against a sha256 built into Lifeboat. A mismatch installs nothing. You then adopt an existing git
 checkout (it must be the repo root, not a subfolder) or create a new store, sign in with GitHub, and install the Lifeboat GitHub App
 on the repo. Lifeboat pushes with its own token only, to that one repo; never `skillshare push` or `sync`, and never another login on the machine.
@@ -95,10 +95,10 @@ on the repo. Lifeboat pushes with its own token only, to that one repo; never `s
 tree (edited and untracked files), with its own pinned gitleaks (never one on `PATH`, and never the repo's own `.gitleaks.toml`).
 Lifeboat's own rules run as a second layer and the findings are merged, e.g. a `"JOPLIN_TOKEN": "..."` or `"api_key": "..."` in an
 `mcp.json`, an `Authorization: Bearer ...` header, AWS, GitHub, Slack and Google keys, private keys, JWTs. Findings name the file,
-line, rule and commit, never the secret. Any finding blocks the push, and the Config store page shows them.
+line, rule and commit, never the secret. Any finding blocks the push, and the Skills on GitHub page shows them.
 
 - **No gitleaks, or it fails to run: the push fails closed.** Lifeboat records "Secret scanner unavailable" and pushes nothing. Run
-  the Config store setup again to reinstall it.
+  the Skills on GitHub setup again to reinstall it.
 - **A pre-push hook** in the store repo runs the same check for pushes you start yourself. If Lifeboat cannot be found it skips the
   check with a warning (a plain `git push` must keep working); if gitleaks is missing it still applies Lifeboat's own rules.
 - **What counts as already checked:** only commits Lifeboat itself pushed (`refs/lifeboat/pushed/<branch>`). A commit that is

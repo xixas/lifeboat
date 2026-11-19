@@ -1366,6 +1366,7 @@ HOME = Path(sys.argv[1])
 cfg_path = config.config_path()
 docs_choice = {"key": "documents", "label": "Documents", "path": str(HOME / "Documents"), "secret": False}
 setup._write_new_config(cfg_path, "laptop", "13:00", setup.wizard_jobs("laptop", [docs_choice]))
+engine.write_json("last-run.json", {"time": datetime.now(timezone.utc).isoformat(), "ok": True, "dry_run": False, "jobs": []})
 repo = HOME / "projects" / "claude-config"
 repo.mkdir(parents=True)
 subprocess.run(["git", "init", "-q", "-b", "main", str(repo)], check=True)
@@ -1404,13 +1405,18 @@ def bad(dest_dir=None): raise store_install.InstallError("checksum mismatch: ref
 store_install.install = bad
 dlg = store_page.StoreSetup(win)
 dlg.present(win)
-assert pump(lambda: any("checksum mismatch" in t for t in labels(dlg.get_child()))), labels(dlg.get_child())
+assert pump(lambda: any("did not match what Lifeboat expected" in t for t in labels(dlg.get_child()))), labels(dlg.get_child())
 assert dlg.nav.get_visible_page().get_tag() == "install"
+assert "The download did not match what Lifeboat expected, so nothing was installed." in labels(dlg.get_child())
+assert [b.get_label() for b in buttons(dlg.get_child())].count("Try again") == 1
 shot("61-store-install-failed", dlg.get_child())
+store_install.install = lambda dest_dir=None: installed.append(1)  # Try again runs the install again, and this time it works
+click(dlg.get_child(), "Try again")
+assert pump(lambda: dlg.nav.get_visible_page().get_tag() == "pick"), labels(dlg.get_child())
 dlg.force_close()
 pump(timeout=0.3)
 
-store_install.install = lambda dest_dir=None: installed.append(1)
+installed.clear()
 
 # an interrupted setup: skillshare already uses a folder, so the pick step offers just that and Continue still works
 store.current = lambda: str(repo)
@@ -1418,6 +1424,7 @@ dlg = store_page.StoreSetup(win)
 dlg.present(win)
 assert pump(lambda: dlg.nav.get_visible_page().get_tag() == "pick")
 assert any("skillshare already uses" in t for t in labels(dlg.get_child())), labels(dlg.get_child())
+assert not [w for w in walk(dlg.get_child()) if isinstance(w, Gtk.CheckButton)]  # one option is information, not a choice
 assert dlg.picked == str(repo)
 shot("6c-store-pick-existing-source", dlg.get_child())
 click(dlg.get_child(), "Continue")
@@ -1433,19 +1440,24 @@ tagd = lambda: dlg.nav.get_visible_page().get_tag()
 assert pump(lambda: tagd() == "pick"), tagd()
 assert installed == [1]
 assert any("claude-config · 37 skills" in t for t in labels(dlg.get_child())), labels(dlg.get_child())
+assert "Your assistants already use this folder" in labels(dlg.get_child()) and "Start with an empty folder" in labels(dlg.get_child())
 shot("62-store-pick", dlg.get_child())
 click(dlg.get_child(), "Continue")
 assert pump(lambda: tagd() == "connect"), tagd()
 assert not [b for b in buttons(dlg.get_child()) if b.get_label() == "Sign in" and b.get_sensitive()]  # needs the repo URL first
 shot("63-store-connect", dlg.get_child())
-click(dlg.get_child(), "Create repo on GitHub")
+assert "Lifeboat can reach only the repository you choose." in labels(dlg.get_child())
+assert [t for t in labels(dlg.get_child()) if t[:2] in ("1.", "3.")] == ["1. Create a private repository", "3. Let Lifeboat into that repository only"]
+open_github = lambda: [b for b in buttons(dlg.get_child()) if b.get_label() == "Open GitHub"]
+assert len(open_github()) == 2
+open_github()[0].emit("clicked")
 assert ("url", github.new_repo_url()) in calls
 dlg.url_row.set_text("not a url")
 assert dlg.url_row.has_css_class("error") and not dlg.signin_btn.get_sensitive()
 dlg.url_row.set_text("https://github.com/xixas/skillshare-source")
 assert dlg.signin_btn.get_sensitive()
 shot("64-store-connect-filled", dlg.get_child())
-click(dlg.get_child(), "Install Lifeboat on it")
+open_github()[1].emit("clicked")
 assert ("url", github.install_url()) in calls
 click(dlg.get_child(), "Sign in")
 assert pump(lambda: tagd() in ("code", "done")), tagd()
@@ -1460,11 +1472,13 @@ pump(timeout=0.5)
 
 win.apply(gather())
 win.show_page("store")
-assert "Push now" in [b.get_label() for b in buttons(win)] and "Sign out" in [b.get_label() for b in buttons(win)]
+assert "Upload now" in [b.get_label() for b in buttons(win)] and "Sign out" in [b.get_label() for b in buttons(win)]
+assert "Manage skills" in [b.get_label() for b in buttons(win)] and "On GitHub" in labels(win) and "Waiting to upload" in labels(win)
+assert win.dots["overview"].get_icon_name() == "object-select-symbolic"  # nothing is wrong with the upload
 pushes = []
-store.run_daily = lambda *a, **kw: (_ for _ in ()).throw(AssertionError("Push now must not push in the app's own process"))
+store.run_daily = lambda *a, **kw: (_ for _ in ()).throw(AssertionError("Upload now must not push in the app's own process"))
 store.push_in_subprocess = lambda: (pushes.append(1), {"ok": True, "pushed": True, "blocked_findings": [], "error": ""})[1]
-click(win, "Push now")
+click(win, "Upload now")
 assert pump(lambda: pushes), pushes
 click(win, "Sign out")
 assert pump(lambda: ("signout",) in calls)
@@ -1473,9 +1487,10 @@ win.apply(gather())
 win.show_page("store")
 names = [b.get_label() for b in buttons(win)]
 assert "Sign in" in names and "Sign out" not in names, names
-assert "Signed out: pushes are paused until you sign in" in labels(win), labels(win)
-push = next(b for b in buttons(win) if b.get_label() == "Push now")
-assert not push.get_sensitive() and push.get_tooltip_text() == "Sign in to push"
+assert "Signed out of GitHub" in labels(win) and "Uploads are paused" in labels(win), labels(win)
+assert "Upload now" not in names
+assert [b.get_label() for b in buttons(win.get_content()) if b.has_css_class("suggested-action")] == ["Sign in"]
+assert win.dots["overview"].get_icon_name() == "dialog-warning-symbolic"  # signed out: the sidebar mark is a warning too
 win.toasts.dismiss_all()  # the "Signed out" toast would cover the buttons in the picture
 pump(timeout=1.0)
 shot("6d-store-status-signed-out", win.get_content())
@@ -1489,10 +1504,14 @@ engine.write_json("store.json", {"time": datetime.now(timezone.utc).isoformat(),
                                  "blocked_findings": [{"file": "skills/x/.env", "line": 3, "rule": "aws-access-key"}], "last_ok_time": None})
 win.apply(gather())
 win.show_page("overview")
+assert "Backed up, but skills are not on GitHub" in labels(win) and "Fully covered" not in labels(win), labels(win)
 assert any(t.startswith("Skills on GitHub: upload blocked") for t in labels(win)), labels(win)
 click(win, "Open")  # a store problem on Overview leads to the store page
 assert win.page == "store"
-assert "skills/x/.env:3:aws-access-key" in labels(win), labels(win)
+assert "Blocked: a secret was found" in labels(win) and "skills/x/.env" in labels(win) and "Line 3 \u00b7 AWS access key" in labels(win), labels(win)
+assert "Nothing was sent. Remove the secrets below, then press Upload now." in labels(win)
+assert [b.get_label() for b in buttons(win)].count("Upload now") == 1
+shot("68-store-status-blocked-secret", win.get_content())
 print("STORE OK")
 '''
 

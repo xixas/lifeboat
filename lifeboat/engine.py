@@ -570,7 +570,7 @@ def status(cfg: Config, store_signed_out: bool = False) -> dict:
     if cfg.skills_enabled:
         from lifeboat.skills import skills
         d["skills"] = skills()
-    _verdict(d, store_signed_out)
+    _verdict(d, store_signed_out and bool(cfg.store_source and cfg.store_push))
     return d
 
 
@@ -608,7 +608,7 @@ def _verdict(d: dict, store_signed_out: bool = False) -> None:
         weakest = f"The last backup is more than {STALE_DAYS} days old."
     if d["dropped"] and title == "Fully covered":
         title, weakest, s["overview"] = "Partly covered", "Something you backed up before is no longer included.", "warn"
-    if title == "Fully covered" and d["store_push"] is not None and (store_signed_out or not d["store_push"].get("ok")):
+    if title == "Fully covered" and (store_signed_out or (d["store_push"] is not None and not d["store_push"].get("ok"))):
         title, weakest, s["overview"] = "Partly covered", "Backed up, but skills are not on GitHub", "warn"
     d["status"] = s
     d["verdict"] = {"title": title, "weakest": weakest}

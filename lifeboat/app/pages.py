@@ -22,7 +22,7 @@ PAGE_ICONS = {"overview": "go-home-symbolic", "backups": "folder-remote-symbolic
               "settings": "document-save-symbolic", "skills": "starred-symbolic", "store": "folder-publicshare-symbolic", "help": "help-about-symbolic",
               "prefs": "emblem-system-symbolic"}
 PAGE_NAMES = {"overview": "Overview", "backups": "Backups", "restore": "Restore", "settings": "Settings snapshot",
-              "skills": "Skills", "store": "Config store", "help": "How it works", "prefs": "Preferences"}
+              "skills": "Skills", "store": "Skills on GitHub", "help": "How it works", "prefs": "Preferences"}
 
 
 class PagesMixin(StoreMixin):

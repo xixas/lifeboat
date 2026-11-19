@@ -20,6 +20,14 @@ def _git_root(path: Path) -> Path | None:
     return Path(r.stdout.strip()) if r.returncode == 0 and r.stdout.strip() else None
 
 
+def not_a_repo_root(path: Path | str) -> str | None:
+    """Why `path` cannot be a store: a store is a whole git repo, because `git add -A` and a push cover the whole repo."""
+    top = _git_root(Path(path))
+    if top and os.path.realpath(top) != os.path.realpath(path):
+        return f"{path} is inside the git repo {top}; pick the repo root"
+    return None
+
+
 def skill_count(repo: Path) -> int:
     return sum(1 for p in repo.rglob("SKILL.md") if ".git" not in p.relative_to(repo).parts)
 
@@ -169,6 +177,9 @@ def run_daily(cfg: Config, gh=None) -> dict | None:
     if not before["is_repo"]:
         result["error"] = f"{repo} is not a git repository"
         return _record(result)
+    if (msg := not_a_repo_root(repo)):
+        result["error"] = msg
+        return _record(result)
     try:
         secretscan.install_pre_push_hook(repo)
     except (OSError, RuntimeError) as e:
@@ -204,6 +215,8 @@ def prepare(repo: Path | str | None, binary: Path | str | None = None, home: Pat
     existing = current()  # a second `skillshare init` exits 1, so an interrupted setup carries on from here
     if existing and repo and os.path.realpath(existing) != os.path.realpath(str(repo)):
         return {"ok": False, "error": f"skillshare already uses {existing}", "source": existing}
+    if (target := existing or repo) and (msg := not_a_repo_root(target)):
+        return {"ok": False, "error": msg, "source": str(target)}
     out = {"ok": True, "error": "", "source": existing} if existing else init_adopt(repo, binary, home) if repo else init_new(binary, home)
     out["source"] = out["source"] if existing else str(repo) if repo else current()
     if not out["ok"]:
@@ -212,6 +225,8 @@ def prepare(repo: Path | str | None, binary: Path | str | None = None, home: Pat
         return {**out, "ok": False, "error": "could not turn off skillshare's update check"}
     if out["source"] and not git_state(out["source"])["is_repo"]:
         return {**out, "ok": False, "error": f"{out['source']} is not a git repository"}
+    if out["source"] and (msg := not_a_repo_root(out["source"])):  # a new store: only skillshare knows the folder it made
+        return {**out, "ok": False, "error": msg}
     try:
         secretscan.install_pre_push_hook(out["source"])
     except (OSError, RuntimeError, TypeError) as e:

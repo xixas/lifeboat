@@ -501,3 +501,42 @@ def test_an_ssh_origin_of_the_confirmed_repo_still_pushes_to_the_https_url(sourc
     assert _git(tmp_path / "hub" / "me" / "store.git", "log", "-1", "--format=%s", "main").strip() == "Update skills"
     assert store.git_state(source)["ahead"] == 0  # the tracking ref follows the push, so the next run has nothing to do
     assert store.run_daily(_cfg(source), gh=Token())["pushed"] is False
+
+
+# ---------------------------------------------------------------- a store is a whole repo
+def _inside_a_bigger_repo(tmp_path):
+    top = _repo(tmp_path / "dotfiles", skills=())
+    sub = top / "ai" / "skills"
+    sub.mkdir(parents=True)
+    (sub / "x.md").write_text("# x\n")
+    return top, sub
+
+
+def test_prepare_refuses_a_folder_inside_a_bigger_repo_and_writes_no_hook(tmp_path, fake_ss):
+    p, log = fake_ss
+    top, sub = _inside_a_bigger_repo(tmp_path)
+    r = store.prepare(sub, binary=p)
+    assert r["ok"] is False and r["error"] == f"{sub} is inside the git repo {top}; pick the repo root"
+    assert not log.exists() and not (top / ".git" / "hooks" / "pre-push").exists()
+
+
+def test_prepare_refuses_an_existing_skillshare_source_that_is_inside_a_bigger_repo(tmp_path, fake_ss, monkeypatch):
+    p, _ = fake_ss
+    top, sub = _inside_a_bigger_repo(tmp_path)
+    _skillshare_config(tmp_path, monkeypatch, sub)
+    for pick in (None, sub):
+        r = store.prepare(pick, binary=p)
+        assert r["ok"] is False and r["error"] == f"{sub} is inside the git repo {top}; pick the repo root"
+    assert not (top / ".git" / "hooks" / "pre-push").exists()
+
+
+def test_the_daily_push_refuses_a_source_inside_a_bigger_repo_and_commits_nothing(tmp_path, monkeypatch):
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+    top, sub = _inside_a_bigger_repo(tmp_path)
+    _git(top, "add", "-A")
+    _git(top, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "init")
+    (top / "unrelated.txt").write_text("not part of the store\n")
+    r = store.run_daily(_cfg(sub), gh=Token())
+    assert r["ok"] is False and r["error"] == f"{sub} is inside the git repo {top}; pick the repo root"
+    assert store.git_state(top)["dirty_count"] == 1 and not (top / ".git" / "hooks" / "pre-push").exists()
+    assert _git(top, "log", "--format=%s").strip() == "init"

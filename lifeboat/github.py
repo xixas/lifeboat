@@ -4,9 +4,13 @@ the user creates the repo on github.com (new_repo_url), installs the app on it (
 All network goes through one injectable `http(method, url, headers, data) -> (status, json)`."""
 from __future__ import annotations
 
+import contextlib
 import json
 import os
+import shlex
+import shutil
 import subprocess
+import tempfile
 import time
 import urllib.error
 import urllib.parse
@@ -17,7 +21,7 @@ API = "https://api.github.com"
 DEVICE_URL = "https://github.com/login/device/code"
 TOKEN_URL = "https://github.com/login/oauth/access_token"
 REFRESH_MARGIN = 300  # refresh when fewer than 5 minutes remain
-HELPER = '!f() { echo username=x-access-token; echo "password=$LIFEBOAT_GH_TOKEN"; }; f'
+HELPER = '!f() {{ echo username=x-access-token; echo "password=$(cat {path})"; }}; f'
 
 
 class GitHubError(RuntimeError):
@@ -165,11 +169,33 @@ class GitHub:
                 for i in installs for r in self._get(f"/user/installations/{i['id']}/repositories").get("repositories", [])]
 
 
-def push(repo_path, token: str, timeout: int = 120, set_upstream: str | None = None) -> dict:
-    """`git push` with the token supplied to this one process through its environment: never argv, never any git config."""
-    argv = ["git", "-C", str(repo_path), "-c", "credential.helper=", "-c", f"credential.helper={HELPER}", "push", *(["-u", "origin", set_upstream] if set_upstream else [])]
+@contextlib.contextmanager
+def _token_file(token: str):
+    """The token in a file only this user can read ($XDG_RUNTIME_DIR, else a 0700 temp dir), removed afterwards. It is passed to
+    git as a file, not through the environment, because git runs hooks (the secret check, a user's own) with that environment."""
+    runtime = os.environ.get("XDG_RUNTIME_DIR")
+    folder = tempfile.mkdtemp(prefix="lifeboat-") if not (runtime and os.path.isdir(runtime)) else None
+    fd, path = tempfile.mkstemp(dir=folder or runtime, prefix="lifeboat-gh-")  # mkstemp creates the file 0600
     try:
-        r = subprocess.run(argv, env={**os.environ, "LIFEBOAT_GH_TOKEN": token, "GIT_TERMINAL_PROMPT": "0"}, capture_output=True, text=True, timeout=timeout, check=False)
+        with os.fdopen(fd, "w") as f:
+            f.write(token)
+        yield path
+    finally:
+        try:
+            os.unlink(path)
+        except FileNotFoundError:
+            pass
+        if folder:
+            shutil.rmtree(folder, ignore_errors=True)
+
+
+def push(repo_path, token: str, timeout: int = 120, set_upstream: str | None = None) -> dict:
+    """`git push` with the token supplied to this one process through a private file: never argv, never the environment, never git config."""
+    try:
+        with _token_file(token) as path:
+            argv = ["git", "-C", str(repo_path), "-c", "credential.helper=", "-c", "credential.helper=" + HELPER.format(path=shlex.quote(path)),
+                    "push", *(["-u", "origin", set_upstream] if set_upstream else [])]
+            r = subprocess.run(argv, env={**os.environ, "GIT_TERMINAL_PROMPT": "0"}, capture_output=True, text=True, timeout=timeout, check=False)
     except (OSError, subprocess.TimeoutExpired) as e:
-        return {"ok": False, "error": str(e)}
+        return {"ok": False, "error": str(e).replace(token, "***")}
     return {"ok": r.returncode == 0, "error": "" if r.returncode == 0 else (r.stderr or r.stdout).replace(token, "***").strip()[-500:]}

@@ -3,11 +3,11 @@
 Back up a Linux laptop to Google Drive or any [rclone](https://rclone.org) remote, and see at a glance whether the
 laptop is safe to lose. A GTK 4 app plus a command line, driven by one config file.
 
-Any folder can go to any remote. Files a backup replaces or deletes are kept in timestamped folders, so you can
+The setup wizard scans the laptop and groups what it finds: your folders, AI assistant settings (Claude Code,
+Codex, Gemini and others), shell and dev configs, and keys. Secrets and AI settings are encrypted. Any folder can go to any remote. Files a backup replaces or deletes are kept in timestamped folders, so you can
 restore old versions.
 
-**Status: early, personal-scale.** The author uses it daily on one laptop. Expect rough edges. There is no setup
-wizard: you edit a TOML file.
+**Status: early, personal-scale.** The author uses it daily on one laptop. Expect rough edges.
 
 ## Install
 

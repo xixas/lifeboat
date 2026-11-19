@@ -13,11 +13,13 @@ from lifeboat.config import (
     Config,
     ConfigError,
     Job,
+    add_ignore_text,
     add_job_text,
     config_path,
     default_old,
     example_config_path,
     load_config,
+    remove_ignore_text,
     remove_job_text,
     render_job_block,
     write_config_text,
@@ -107,6 +109,34 @@ def cmd_check(a) -> int:
         from lifeboat.app.notify import send
         send(probs)
     return 0
+
+
+def cmd_scan(a) -> int:
+    from pathlib import Path
+
+    from lifeboat import catalogue
+    items = catalogue.scan(Path.home())
+    if a.json:
+        _dump({"items": items})
+        return 0
+    for group, title in catalogue.GROUPS.items():
+        rows = [i for i in items if i["group"] == group]
+        if rows:
+            print(f"{title}:")
+        for i in rows:
+            flags = "".join(f"  [{f}]" for f, on in (("encrypted", i["secret"]), ("on", i["default_on"]), ("ignored", i["ignored"])) if on)
+            print(f"  {i['key']}: {i['label']}, {i['path']}{flags}")
+    return 0
+
+
+def cmd_ignore(a) -> int:
+    cfg = _load()
+    text = cfg.path.read_text(encoding="utf-8")
+    add = a.cmd == "ignore"
+    new_text = (add_ignore_text if add else remove_ignore_text)(text, a.key)
+    verb = "no longer be listed as missing from" if add else "be offered again in"
+    return _edit(a, cfg, new_text, {"ignored" if add else "unignored": a.key},
+                 [f"{a.key!r} will {verb} the backup suggestions."])
 
 
 def cmd_versions(a) -> int:
@@ -227,7 +257,7 @@ def cmd_add_job(a) -> int:
     _check_remote(cfg, a.dest)
     if not a.existing_dest:
         _check_dest_empty(cfg, a.dest)
-    job = Job(a.name, a.source, a.dest, a.old or default_old(a.dest), a.exclude, a.include, a.filter_file or "", a.encrypted)
+    job = Job(a.name, a.source, a.dest, a.old or default_old(a.dest), a.exclude, a.include, a.filter_file or "", a.encrypted, a.links)
     new_text = add_job_text(cfg.path.read_text(encoding="utf-8"), job)
     human = [render_job_block(job).rstrip(), "No data has been copied yet. Next: lifeboat run --dry-run"]
     return _edit(a, cfg, new_text, {"added": asdict(job)}, human)
@@ -275,6 +305,15 @@ def parser() -> argparse.ArgumentParser:
     s.add_argument("--json", action="store_true", help="print the problems as JSON; never notifies")
     s.add_argument("--ack-dropped", action="store_true", help="stop the \"No longer backed up\" reminder; check nothing else")
     s.set_defaults(fn=cmd_check)
+    s = sub.add_parser("scan", help="list what on this laptop could be backed up")
+    s.add_argument("--json", action="store_true")
+    s.set_defaults(fn=cmd_scan)
+    for name, text in (("ignore", "stop suggesting an item from `lifeboat scan`"), ("unignore", "suggest an ignored item again")):
+        s = sub.add_parser(name, help=text)
+        s.add_argument("key", metavar="KEY", help="the item's key, as shown by `lifeboat scan`")
+        s.add_argument("--dry-run", action="store_true", help="validate and report; change nothing")
+        s.add_argument("--json", action="store_true")
+        s.set_defaults(fn=cmd_ignore)
     s = sub.add_parser("versions", help="list old versions of a job")
     s.add_argument("job")
     s.add_argument("--json", action="store_true")
@@ -305,6 +344,7 @@ def parser() -> argparse.ArgumentParser:
     s.add_argument("--include", action="append", default=[], metavar="PAT", help="rclone include pattern (repeatable)")
     s.add_argument("--filter-file", metavar="FILE", help="rclone --filter-from file")
     s.add_argument("--encrypted", action="store_true", help="mark the job as living on a crypt remote (display only)")
+    s.add_argument("--links", action="store_true", help="store symlinks as links (rclone --links) instead of following them")
     s.add_argument("--existing-dest", action="store_true", help="DEST already holds this job's own earlier backup")
     s.add_argument("--dry-run", action="store_true", help="show the block; change nothing")
     s.add_argument("--json", action="store_true")

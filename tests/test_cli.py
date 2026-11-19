@@ -171,7 +171,7 @@ def test_add_job_keeps_tilde_and_honours_old_flag(env, make_cfg, capsys, monkeyp
     (env / "stuff").mkdir()
     assert cli.main(["add-job", "stuff", "~/stuff", "vault:stuff", "--old", "vault:versions", "--encrypted"]) == 0
     job = load_config(cfg.path).jobs[1]
-    assert (job.source, job.old, job.encrypted) == ("~/stuff", "vault:versions", True)
+    assert (job.source, job.old, job.encrypted, job.links) == ("~/stuff", "vault:versions", True, False)
     assert "lifeboat run --dry-run" in capsys.readouterr().out
 
 
@@ -306,3 +306,36 @@ def test_check_reports_dropped_sources_until_ack_dropped(env, make_cfg, capsys):
     assert engine.dropped_sources() == []
     assert cli.main(["check", "--dry-run"]) == 0
     assert "No longer backed up" not in capsys.readouterr().out
+
+
+def test_scan_lists_items_grouped_and_as_json(env, fake_home, capsys):
+    (fake_home / "Documents").mkdir()
+    (fake_home / ".claude").mkdir()
+    assert cli.main(["scan"]) == 0
+    out = capsys.readouterr().out
+    assert out.index("Files") < out.index("AI assistants") and "Documents" in out and "Claude" in out and "[encrypted]" in out
+    assert cli.main(["scan", "--json"]) == 0
+    items = {i["key"]: i for i in json.loads(capsys.readouterr().out)["items"]}
+    assert items["claude"]["group"] == "ai" and items["documents"]["ignored"] is False
+
+
+def test_ignore_and_unignore_edit_the_config_and_scan_shows_it(env, make_cfg, fake_home, capsys, monkeypatch):
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(env / "config"))  # fake_home moved it; the config lives where make_cfg put it
+    cfg = write_cfg(env, make_cfg)
+    (fake_home / ".claude").mkdir()
+    cfg.path.write_text("# mine\n" + cfg.path.read_text())
+    assert cli.main(["ignore", "claude"]) == 0
+    assert load_config(cfg.path).scan_ignore == ["claude"] and cfg.path.read_text().startswith("# mine\n")
+    capsys.readouterr()
+    assert cli.main(["scan", "--json"]) == 0
+    assert {i["key"]: i for i in json.loads(capsys.readouterr().out)["items"]}["claude"]["ignored"] is True
+    assert cli.main(["unignore", "claude"]) == 0
+    assert load_config(cfg.path).scan_ignore == []
+    assert cli.main(["ignore", "bad key"]) == 2
+
+
+def test_add_job_links_flag_writes_the_links_key(env, make_cfg):
+    cfg = write_cfg(env, make_cfg)
+    (env / "notes").mkdir()
+    assert cli.main(["add-job", "notes", str(env / "notes"), "localdrv:Backup/notes", "--links"]) == 0
+    assert load_config(cfg.path).jobs[1].links is True

@@ -27,6 +27,7 @@ Install the skill (copy `skills/lifeboat` to `~/.claude/skills/`, or `npx skills
 | `lifeboat scan` | What on this laptop could be backed up | `{items: [{key, label, group, path, kind, secret, default_on, exclude, links, ignored, link_count?}]}` |
 | `lifeboat ignore KEY` / `unignore KEY [--dry-run]` | Hide or unhide a scan item (`[scan] ignore`) | `{ignored or unignored, config_path, dry_run}` |
 | `lifeboat prune` | Delete old versions past `keep_days` | the prune result |
+| `lifeboat store-push` | Scan and push the config store (the skills repo) | `{time, ok, pushed, blocked_findings: [{file, line, rule, commit?}], error, signed_out}`. Exit 1 if not ok |
 
 - **JSON:** with `--json`, stdout is exactly one JSON document. Progress and rclone output go to stderr.
 - **Exit codes:** `0` ok. `1` the operation ran and failed, or something is not ok. `2` config or usage error (message on stderr).
@@ -91,6 +92,20 @@ per-job results, missing rclone remotes, timers.
 4. Never set `settings.command` or `rclone.password_command` unless the user asks. Both run shell commands.
 5. Never delete remote data (`rclone purge`, `rclone delete`). Do not run `lifeboat prune` unless the user asks.
 6. Use `add-job` and `remove-job` instead of editing `config.toml` by hand.
+
+## Config store
+
+The config store is a git repo of skills pushed to GitHub. Set it up in the app (Config store page): it installs pinned, hash-checked
+skillshare and gitleaks, adopts or creates the repo and signs in to GitHub. There is no CLI setup.
+
+- `lifeboat store-push` scans, then pushes with Lifeboat's own GitHub token. `blocked_findings` lists file, line, rule and commit,
+  never the secret. Fix the file (move the value to the keyring or an environment variable); do not allowlist a real secret.
+- The scanner is Lifeboat's pinned gitleaks plus Lifeboat's own rules, over every commit not yet pushed by Lifeboat, the index and
+  the working tree. If gitleaks is missing or fails, the push fails closed with "Secret scanner unavailable". Never install a
+  gitleaks on `PATH` to work around it; rerun the app's store setup.
+- Never push the store by other means (`skillshare push`, `git push` with other credentials), edit the pre-push hook, or add
+  `.lifeboat-secrets-allow` entries without the user's say-so.
+- Never pushed: any flagged content, and files such as `.env`, `id_rsa*`, `*.pem`, `*.key`, `*credentials*`.
 
 ## Example prompts
 

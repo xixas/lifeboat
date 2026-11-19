@@ -5,7 +5,7 @@ laptop is safe to lose. A GTK 4 app plus a command line, driven by one config fi
 
 The setup wizard scans the laptop and groups what it finds: your folders, AI assistant settings (Claude Code,
 Codex, Gemini and others), shell and dev configs, and keys. Secrets and AI settings are encrypted. Any folder can go to any remote. Files a backup replaces or deletes are kept in timestamped folders, so you can
-restore old versions.
+restore old versions. A config store pushes your AI skills to a GitHub repo, behind a secret scan (a pinned, hash-verified gitleaks plus Lifeboat's own rules) that blocks the push on any finding or if the scanner is missing.
 
 **Status: early, personal-scale.** The author uses it daily on one laptop. Expect rough edges.
 

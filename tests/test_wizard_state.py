@@ -130,3 +130,13 @@ def test_keep_backing_up_defaults_on_for_this_laptops_own_backup():
     assert keep_backing_up_default(ago(2), now, same_laptop=True) is True
     # but not minutes ago: a reinstall cannot have backed up that recently, a cloned disk still running can
     assert keep_backing_up_default(ago(0.5), now, same_laptop=True) is False
+
+
+def test_ignored_choices_are_never_selected_and_come_back_on_restore():
+    c = Choices([F, {**K, "ignored": True}])
+    assert c.ignored_keys() == ["ssh"] and [f["key"] for f in c.selected()] == ["documents"]
+    c.ignore("/h/Documents")
+    assert not c.can_continue()
+    c.unignore("/h/Documents")
+    c.unignore("/h/.ssh")
+    assert [f["key"] for f in c.selected()] == ["documents", "ssh"] and c.ignored_keys() == []

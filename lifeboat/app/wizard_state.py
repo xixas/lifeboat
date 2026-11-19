@@ -91,9 +91,12 @@ class Choices:
         self._f: dict[str, dict] = {}
         self._on: dict[str, bool] = {}
         self._touched: set[str] = set()
+        self._ignored: set[str] = set()
         for f in folders:
             self._f[f["path"]] = dict(f)
             self._on[f["path"]] = f["default_on"]
+            if f.get("ignored"):
+                self._ignored.add(f["path"])
 
     def is_on(self, path: str) -> bool:
         return self._on[path]
@@ -130,10 +133,21 @@ class Choices:
     def remove(self, path: str) -> None:
         self._f.pop(path, None)
         self._on.pop(path, None)
+        self._ignored.discard(path)
         self._touched.discard(path)
 
+    def ignore(self, path: str) -> None:
+        self._ignored.add(path)
+
+    def unignore(self, path: str) -> None:
+        self._ignored.discard(path)
+
+    def ignored_keys(self) -> list[str]:
+        """The catalogue keys of the ignored items, to write into the new config."""
+        return [f["key"] for p, f in self._f.items() if p in self._ignored]
+
     def selected(self) -> list[dict]:
-        return [f for p, f in self._f.items() if self._on[p]]
+        return [f for p, f in self._f.items() if self._on[p] and p not in self._ignored]
 
     def can_continue(self) -> bool:
         return bool(self.selected())

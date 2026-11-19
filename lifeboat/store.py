@@ -154,3 +154,57 @@ def run_daily(cfg: Config, gh=None, binary: Path | str | None = None) -> dict | 
     out = _push(repo, gh or github.GitHub(), binary)
     result.update(ok=out["ok"], pushed=out["ok"], error=out["error"])
     return _record(result)
+
+
+# ---------------------------------------------------------------- setup steps the app drives
+def github_repo(url: str | None) -> str | None:
+    """'owner/name' for a github.com remote (https or ssh, with or without .git or a login), else None."""
+    m = re.match(r"^(?:https?://(?:[^@/]+@)?|ssh://git@|git@)github\.com[:/]([\w.-]+)/([\w.-]+?)(?:\.git)?/?$", (url or "").strip())
+    return f"{m.group(1)}/{m.group(2)}" if m else None
+
+
+def prepare(repo: Path | str | None, binary: Path | str | None = None, home: Path | str | None = None) -> dict:
+    """Adopt `repo` (or create a new store when None), turn skillshare's online update check off and install the pre-push
+    check. {ok, error, source}; stops at the first step that fails."""
+    out = init_adopt(repo, binary, home) if repo else init_new(binary, home)
+    out["source"] = str(repo) if repo else current()
+    if not out["ok"]:
+        return out
+    if not store_install.disable_update_check(binary, home):
+        return {**out, "ok": False, "error": "could not turn off skillshare's update check"}
+    try:
+        secretscan.install_pre_push_hook(out["source"])
+    except (OSError, RuntimeError, TypeError) as e:
+        return {**out, "ok": False, "error": f"could not install the pre-push check: {e}"}
+    return out
+
+
+def connect_remote(repo: Path | str, clone_url: str) -> None:
+    """Give a store with no remote its GitHub origin and make the current branch track it, so a plain `git push` works.
+    A remote that is already there is never changed."""
+    if _git(repo, "remote", "get-url", "origin"):
+        return
+    branch = (git_state(repo)["branch"]) or "main"
+    for args in (["remote", "add", "origin", clone_url], ["config", f"branch.{branch}.remote", "origin"],
+                 ["config", f"branch.{branch}.merge", f"refs/heads/{branch}"]):
+        if _git(repo, *args) is None:
+            raise RuntimeError(f"git {args[0]} failed")
+
+
+def find_repo(gh, url: str) -> dict | None:
+    """The repo the app can reach that `url` names, or None (the app is not installed on it, or the URL is not GitHub's)."""
+    want = github_repo(url)
+    return next((r for r in gh.installation_repos() if want and r["full_name"].lower() == want.lower()), None) if want else None
+
+
+def start_ui(binary: Path | str | None = None) -> bool:
+    """`skillshare ui start`, left running in the background (it serves http://127.0.0.1:19420)."""
+    binary = binary or store_install.skillshare_path() or shutil.which("skillshare")
+    if not binary:
+        return False
+    try:
+        subprocess.Popen([str(binary), "ui", "start"], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                         start_new_session=True)
+    except OSError:
+        return False
+    return True

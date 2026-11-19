@@ -243,3 +243,13 @@ def test_store_section_parses_and_is_validated():
     assert (c.store_source, c.store_push) == ("~/s", True)
     with pytest.raises(ConfigError, match=r"store.nope"):
         parse({"jobs": [JOB], "store": {"nope": 1}})
+
+
+def test_set_store_text_adds_or_replaces_the_store_table():
+    base = '[[jobs]]\nname = "d"\nsource = "~/D"\ndest = "x:d"\nold = "x:_old"\n'
+    text = config.set_store_text(base, "~/projects/claude-config")
+    cfg = config.validate_text(text)
+    assert (cfg.store_source, cfg.store_push) == ("~/projects/claude-config", True)
+    again = config.set_store_text(text, "~/other")
+    assert config.validate_text(again).store_source == "~/other" and again.count("[store]") == 1
+    assert config.validate_text(again).jobs[0].name == "d"

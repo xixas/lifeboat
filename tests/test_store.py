@@ -280,3 +280,63 @@ def test_a_crashing_store_push_never_fails_the_backup(source, tmp_path, make_cfg
         raise OSError("disk")
     monkeypatch.setattr(store, "run_daily", boom)
     assert engine.run_backup(make_cfg(store={"source": str(source), "push": True}), settings=False)["ok"] is True
+
+
+# ---------------------------------------------------------------- setup steps the UI drives
+@pytest.mark.parametrize("url,name", [("https://github.com/xixas/claude-config.git", "xixas/claude-config"),
+                                      ("https://github.com/xixas/claude-config", "xixas/claude-config"),
+                                      ("git@github.com:xixas/skillshare-source.git", "xixas/skillshare-source"),
+                                      ("https://x-access-token:abc@github.com/o/r.git/", "o/r"),
+                                      ("https://gitlab.com/o/r.git", None), ("/tmp/bare.git", None), ("", None), (None, None)])
+def test_github_repo_names(url, name):
+    assert store.github_repo(url) == name
+
+
+def test_prepare_adopts_disables_update_check_and_installs_the_hook(tmp_path, fake_ss):
+    p, log = fake_ss
+    repo = _repo(tmp_path / "claude-config")
+    r = store.prepare(repo, binary=p, home=tmp_path / "h")
+    assert r == {"ok": True, "error": "", "source": str(repo)}
+    cmds = [ln.split("|", 1)[1].strip() for ln in log.read_text().splitlines()]
+    assert cmds[0].startswith("init --source") and cmds[1] == "updates off"
+    assert (repo / ".git" / "hooks" / "pre-push").is_file()
+
+
+def test_prepare_stops_when_init_fails(tmp_path, monkeypatch):
+    p = tmp_path / "skillshare"
+    p.write_text("#!/bin/sh\necho boom >&2\nexit 3\n")
+    p.chmod(0o755)
+    r = store.prepare(_repo(tmp_path / "r"), binary=p)
+    assert r["ok"] is False and "boom" in r["error"] and not (tmp_path / "r" / ".git" / "hooks" / "pre-push").exists()
+
+
+def test_prepare_a_new_store_uses_the_folder_skillshare_reports(tmp_path, fake_ss, monkeypatch):
+    p, log = fake_ss
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "c"))
+    new = _repo(tmp_path / "newstore")
+    (tmp_path / "c" / "skillshare").mkdir(parents=True)
+    (tmp_path / "c" / "skillshare" / "config.yaml").write_text(f"sources:\n  skills: {new}\n")
+    r = store.prepare(None, binary=p)
+    assert r["ok"] and r["source"] == str(new) and "--git" in log.read_text()
+    assert (new / ".git" / "hooks" / "pre-push").is_file()
+
+
+def test_find_repo_matches_the_installed_repos_by_name():
+    class GH:
+        def installation_repos(self):
+            return [{"full_name": "xixas/skillshare-source", "clone_url": "https://github.com/xixas/skillshare-source.git", "private": True}]
+    assert store.find_repo(GH(), "https://github.com/xixas/skillshare-source")["full_name"] == "xixas/skillshare-source"
+    assert store.find_repo(GH(), "https://github.com/xixas/other") is None
+    assert store.find_repo(GH(), "not a url") is None
+
+
+def test_connect_remote_adds_origin_and_an_upstream_for_the_current_branch(tmp_path):
+    repo = tmp_path / "r"
+    repo.mkdir()
+    _git(repo, "init", "-q", "-b", "main")
+    store.connect_remote(repo, "https://github.com/xixas/skillshare-source.git")
+    assert _git(repo, "remote", "get-url", "origin").strip() == "https://github.com/xixas/skillshare-source.git"
+    assert _git(repo, "config", "branch.main.remote").strip() == "origin"
+    assert _git(repo, "config", "branch.main.merge").strip() == "refs/heads/main"
+    store.connect_remote(repo, "https://github.com/xixas/other.git")  # an existing origin is left alone
+    assert "skillshare-source" in _git(repo, "remote", "get-url", "origin")

@@ -317,6 +317,15 @@ def remove_ignore_text(text: str, key: str) -> str:
     return _set_ignore(text, [k for k in have if k != key]) if key in have else text
 
 
+def set_store_text(text: str, source: str, push: bool = True) -> str:
+    """text with a [store] table holding source and push (any earlier [store] table is replaced)."""
+    segs = _segments(text)
+    keep = [seg for seg in segs if next((ln for ln in seg.splitlines() if ln.strip() and not ln.lstrip().startswith("#")), "").strip() != "[store]"]
+    new = "".join(keep).rstrip("\n") + f"\n\n[store]\nsource = {json.dumps(source, ensure_ascii=False)}\npush = {'true' if push else 'false'}\n"
+    validate_text(new)
+    return new
+
+
 def write_config_text(path: Path, text: str) -> None:
     """Replace the config atomically (same mode), keeping the previous file as <name>.bak."""
     validate_text(text, path)

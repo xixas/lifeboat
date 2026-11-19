@@ -251,3 +251,33 @@ def test_the_allowlist_silences_a_rule_in_a_file_or_a_line(repo):
     (repo / ".lifeboat-secrets-allow").write_text("# example keys\naws-access-key:docs/a.md\naws-access-key:docs/b.md:2\n\n")
     assert [(f["file"], f["line"]) for f in secretscan.scan_range(repo, base, head)] == [("docs/b.md", 1)]
     assert secretscan.scan_working_tree(repo) == []
+
+
+def test_the_hook_goes_where_core_hookspath_points_repo_level(repo, tmp_path):
+    hooks = tmp_path / "my-hooks"
+    hooks.mkdir()
+    (hooks / "pre-push").write_text("#!/bin/sh\necho theirs >&2\nexit 0\n")
+    (hooks / "pre-push").chmod(0o755)
+    git(repo, "config", "core.hooksPath", str(hooks))
+    hook = secretscan.install_pre_push_hook(repo)
+    assert hook == hooks / "pre-push" and secretscan.HOOK_MARK in hook.read_text()
+    assert "theirs" in (hooks / "pre-push.lifeboat-chained").read_text()  # their hook still runs
+    assert not (repo / ".git" / "hooks" / "pre-push").exists()
+    _remote(repo, tmp_path)
+    commit(repo, {"SKILL.md": f"token {GH}\n"})
+    r = subprocess.run(["git", "-C", str(repo), "push", "origin", "main"], capture_output=True, text=True, env=push_env())
+    assert r.returncode != 0 and "SKILL.md" in r.stderr
+
+
+def test_the_hook_goes_where_a_global_core_hookspath_points(repo, tmp_path, monkeypatch):
+    hooks = tmp_path / "global-hooks"
+    gitconfig = tmp_path / "gitconfig"
+    gitconfig.write_text(f"[core]\n\thooksPath = {hooks}\n")
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(gitconfig))
+    hook = secretscan.install_pre_push_hook(repo)
+    assert hook == hooks / "pre-push" and hook.is_file() and not (repo / ".git" / "hooks" / "pre-push").exists()
+
+
+def test_a_relative_hookspath_is_relative_to_the_repo(repo):
+    git(repo, "config", "core.hooksPath", ".githooks")
+    assert secretscan.install_pre_push_hook(repo) == repo / ".githooks" / "pre-push"

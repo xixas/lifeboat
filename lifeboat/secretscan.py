@@ -213,9 +213,10 @@ exit 0
 
 
 def install_pre_push_hook(repo) -> Path:
-    """Write .git/hooks/pre-push. Any hook already there is kept as pre-push.lifeboat-chained and still runs."""
-    git_dir = Path(_git(repo, "rev-parse", "--absolute-git-dir").strip())
-    hook = git_dir / "hooks" / "pre-push"
+    """Write pre-push into the hooks folder git uses (.git/hooks, or core.hooksPath if set in the repo or globally). Any hook
+    already there is kept as pre-push.lifeboat-chained and still runs."""
+    hooks = Path(_git(repo, "rev-parse", "--path-format=absolute", "--git-path", "hooks").strip())
+    hook = hooks / "pre-push"
     chained = hook.with_name("pre-push.lifeboat-chained")
     hook.parent.mkdir(parents=True, exist_ok=True)
     if hook.exists() and HOOK_MARK not in hook.read_text(errors="replace"):

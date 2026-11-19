@@ -105,13 +105,9 @@ def mark_seen(keys) -> None:
 
 
 def unseen_new_items(items: list[dict], cfg: Config) -> list[dict]:
-    """new_items against the seen file. The first time there is no file: everything on the laptop now counts as seen,
-    so a fresh setup does not open with an alert."""
-    seen = read_seen()
-    if seen is None:
-        mark_seen(i["key"] for i in items)
-        return []
-    return new_items(items, cfg, seen)
+    """new_items against the seen file. The setup wizard writes the file when it creates the config, so a missing file means
+    a config from before this feature: nothing has been shown yet, and what is not backed up counts as new."""
+    return new_items(items, cfg, read_seen() or set())
 
 
 def grouped(items: list[dict]) -> list[tuple[str, str, list[dict], bool]]:

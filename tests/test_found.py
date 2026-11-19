@@ -95,14 +95,22 @@ def test_seen_keys_are_kept_in_a_state_file(fake_home, monkeypatch):
     assert found.read_seen() == {"a", "b", "c"}
 
 
-def test_first_check_marks_everything_seen_and_reports_nothing(cfg_file, fake_home, monkeypatch):
+def test_an_upgrader_without_a_seen_file_is_told_about_uncovered_items(cfg_file, fake_home, monkeypatch):
+    """A config that predates the seen file: what is not backed up yet must show as new, not be swallowed."""
     monkeypatch.setenv("XDG_STATE_HOME", str(fake_home / "state"))
     cfg = config.load_config(cfg_file)
-    items = [item("claude", fake_home / ".claude")]
-    assert found.unseen_new_items(items, cfg) == []
-    assert found.read_seen() == {"claude"}
-    items.append(item("codex", fake_home / ".codex"))
+    items = [item("documents", fake_home / "Documents"), item("claude", fake_home / ".claude")]
+    assert [i["key"] for i in found.unseen_new_items(items, cfg)] == ["claude"]
+    assert found.read_seen() is None  # only looking at them (Review) marks them seen
+
+
+def test_the_wizard_marks_what_it_showed_as_seen(fake_home, monkeypatch):
+    monkeypatch.setenv("XDG_STATE_HOME", str(fake_home / "state"))
+    found.mark_seen(["documents", "claude"])  # what the wizard calls once the config exists
+    cfg = config.parse({"jobs": [{"name": "d", "source": "~/Documents", "dest": "x:d", "old": "x:_old"}]})
+    items = [item("claude", fake_home / ".claude"), item("codex", fake_home / ".codex")]
     assert [i["key"] for i in found.unseen_new_items(items, cfg)] == ["codex"]
+
 
 
 def test_items_group_in_catalogue_order_and_group_less_items_fall_back():

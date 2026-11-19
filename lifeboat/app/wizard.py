@@ -330,6 +330,7 @@ class SetupWizard(AccountDialog):
         token, passphrase = self.token, self.passphrase
         device, choices, daily_at = self.device, self.choices.selected(), self.daily_at
         ignored = self.choices.ignored_keys()  # kept in memory until the config exists
+        shown = [f["key"] for f in self.found.items]  # the user saw these, so Overview must not call them new
         existing = [m["device"] for m in self.existing]
 
         def work():
@@ -342,6 +343,7 @@ class SetupWizard(AccountDialog):
             try:
                 setup.write_wizard_config(cfg_file, device, choices, daily_at, existing_devices=existing)
                 found.apply_ignore(cfg_file, ignored)
+                found.mark_seen(shown)
                 cfg = load_config(cfg_file)
             except (setup.SetupError, ConfigError, OSError) as e:
                 return None, (f"Could not write the Lifeboat config: {e}. Your backup remotes were created and kept, "

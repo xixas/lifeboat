@@ -334,6 +334,7 @@ assert cfgc[1] == "my-laptop" and cfgc[3] == "09:00" and cfgc[4] == []
 chosen = [c["path"] for c in cfgc[2]]
 assert str(HOME / "Extra") in chosen and str(HOME / ".ssh") in chosen, chosen
 assert [c for c in cfgc[2] if c["path"] == str(HOME / ".ssh")][0]["secret"] is True
+assert lifeboat_found.read_seen() >= {"documents", "pictures", "claude"}, lifeboat_found.read_seen()  # shown, so not "new" later
 assert str(HOME / "Pictures") not in chosen and ("ignore", ["pictures"]) in calls, calls  # ignored: not backed up, remembered
 assert ("timer",) in calls
 order = [c[0] for c in calls]

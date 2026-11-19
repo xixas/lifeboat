@@ -152,3 +152,14 @@ def test_cli_pre_push_exit_codes(repo):
     line = f"refs/heads/main {head} refs/heads/main {base}\n"
     r = subprocess.run([sys.executable, "-m", "lifeboat.secretscan", "--pre-push"], input=line, capture_output=True, text=True, cwd=repo, env=push_env())
     assert r.returncode == 1
+
+
+def test_working_tree_scan_covers_modified_and_untracked(repo):
+    (repo / "README.md").write_text(f"hello\n{AWS}\n")
+    (repo / "new").mkdir()
+    (repo / "new" / "SKILL.md").write_text(f"token {GH}\n")
+    (repo / ".env").write_text("A=1\n")
+    found = secretscan.scan_working_tree(repo)
+    assert {(f["file"], f["rule"]) for f in found} == {("README.md", "aws-access-key"), ("new/SKILL.md", "github-token"), (".env", "risky-file-name")}
+    git(repo, "checkout", "--", "README.md")
+    assert {f["file"] for f in secretscan.scan_working_tree(repo)} == {"new/SKILL.md", ".env"}

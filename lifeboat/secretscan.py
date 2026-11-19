@@ -97,13 +97,32 @@ def scan_range(repo, base: str | None, head: str = "HEAD") -> list[dict]:
         for f in files:
             found += _scan_text(f, _git(repo, "show", f"{head}:{f}").splitlines())
     found += [_finding(f, 0, "risky-file-name") for f in files if _risky_name(f)]
+    return _dedupe(found + _gitleaks(repo, base, head))
+
+
+def _dedupe(found: list[dict]) -> list[dict]:
     seen, out = set(), []
-    for f in found + _gitleaks(repo, base, head):
+    for f in found:
         key = (f["file"], f["line"], f["rule"])
         if key not in seen:
             seen.add(key)
             out.append(f)
     return out
+
+
+def scan_working_tree(repo) -> list[dict]:
+    """Findings in changes not committed yet: edits to tracked files plus untracked files (what `skillshare push` would commit)."""
+    found = []
+    for file, n, text in _added_lines(_git(repo, "diff", "--no-color", "-U0", "--no-ext-diff", "HEAD")):
+        found += _scan_text(file, [text], n)
+    untracked = _git(repo, "ls-files", "--others", "--exclude-standard", "-z").split("\0")
+    for f in filter(None, untracked):
+        try:
+            found += _scan_text(f, (Path(repo) / f).read_text(errors="replace").splitlines())
+        except OSError:
+            pass
+    changed = _git(repo, "diff", "--name-only", "HEAD").splitlines() + [f for f in untracked if f]
+    return _dedupe(found + [_finding(f, 0, "risky-file-name") for f in changed if _risky_name(f)])
 
 
 def scan_pre_push(repo, stdin_text: str) -> list[dict]:

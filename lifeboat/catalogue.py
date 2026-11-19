@@ -3,7 +3,10 @@ from __future__ import annotations
 
 import os
 import re
+from collections.abc import Iterable
 from pathlib import Path
+
+from lifeboat.config import read_ignore
 
 # Display order. "files" holds the standard folders (Documents ...); the rest come from the catalogue below.
 GROUPS = {
@@ -118,8 +121,9 @@ def _linked_items(home: Path, agents: list[dict]) -> list[dict]:
                      links=True), "link_count": n} for r, n in sorted(roots.items())]
 
 
-def scan(home: Path) -> list[dict]:
-    """Every catalogue entry that exists under home, in group order. No size walks: this stays instant."""
+def scan(home: Path, ignore: Iterable[str] | None = None) -> list[dict]:
+    """Every catalogue entry that exists under home, in group order. No size walks: this stays instant.
+    Items whose key is in `ignore` (default: [scan] ignore from the config) come back with ignored=True."""
     home = Path(home)
     from lifeboat import setup  # late: setup imports this module
     items = [_item(name.lower(), label, "files", path, "dir", False) for name, label, path in setup.standard_folders(home)]
@@ -137,5 +141,6 @@ def scan(home: Path) -> list[dict]:
     for d in sorted(config.iterdir(), key=lambda p: p.name.lower()) if config.is_dir() else []:
         if d.is_dir() and not any(c == d or d in c.parents for c in covered):
             items.append(_item("config-" + d.name.lower(), d.name, "other", d, "dir", False))
+    hidden = set(read_ignore() if ignore is None else ignore)
     order = list(GROUPS)
-    return sorted(items, key=lambda i: order.index(i["group"]))
+    return sorted(({**i, "ignored": i["key"] in hidden} for i in items), key=lambda i: order.index(i["group"]))

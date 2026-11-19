@@ -66,3 +66,19 @@ def test_symlinks_leaving_an_agent_folder_become_linked_roots(fake_home):
     assert (git["group"], git["secret"], git["default_on"], git["links"]) == ("ai", True, True, True)
     assert by_path[str(loose)]["link_count"] == 1
     assert len({i["key"] for i in linked}) == 2
+
+
+def test_ignored_items_are_marked_not_dropped(fake_home):
+    mk(fake_home, ".claude", ".config/inkscape", "Documents")
+    got = by_key(catalogue.scan(fake_home, ignore=["claude", "config-inkscape"]))
+    assert got["claude"]["ignored"] is True and got["config-inkscape"]["ignored"] is True
+    assert got["documents"]["ignored"] is False
+
+
+def test_scan_reads_the_ignore_list_from_the_config_by_default(fake_home):
+    mk(fake_home, ".claude", ".config/lifeboat")
+    (fake_home / ".config" / "lifeboat" / "config.toml").write_text(
+        '[scan]\nignore = ["claude"]\n[[jobs]]\nname = "a"\nsource = "~/a"\ndest = "r:a"\nold = "r:_old"\n')
+    assert by_key(catalogue.scan(fake_home))["claude"]["ignored"] is True
+    (fake_home / ".config" / "lifeboat" / "config.toml").write_text("not toml [")
+    assert by_key(catalogue.scan(fake_home))["claude"]["ignored"] is False  # a broken config never breaks the scan

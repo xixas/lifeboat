@@ -200,3 +200,37 @@ def test_links_key_parses_and_renders():
     assert "links = true" in render_job_block(job)
     assert "links" not in render_job_block(Job("b", "~/b", "r:b", "r:_old"))
     assert parse(__import__("tomllib").loads(add_job_text(BASE, job))).jobs[1] == job
+
+
+def test_scan_ignore_parses_and_is_validated():
+    assert parse({"jobs": [JOB]}).scan_ignore == []
+    assert parse({"jobs": [JOB], "scan": {"ignore": ["a", "b"]}}).scan_ignore == ["a", "b"]
+    with pytest.raises(ConfigError, match=r"scan.ignore"):
+        parse({"jobs": [JOB], "scan": {"ignore": "a"}})
+    with pytest.raises(ConfigError, match=r"scan.colour"):
+        parse({"jobs": [JOB], "scan": {"colour": 1}})
+
+
+def test_ignore_text_adds_and_removes_keys_and_keeps_comments():
+    import tomllib
+
+    from lifeboat.config import add_ignore_text, remove_ignore_text
+    new = add_ignore_text(BASE, "steam")
+    assert new.startswith(BASE.rstrip("\n")) and "# my backups" in new
+    assert parse(tomllib.loads(new)).scan_ignore == ["steam"]
+    both = add_ignore_text(new, "cache")
+    assert add_ignore_text(both, "steam") == both  # no duplicates
+    assert parse(tomllib.loads(both)).scan_ignore == ["steam", "cache"]
+    commented = '[scan]\n# things I never want\nignore = [\n  "a",\n  "b",  # why\n]\nother = 1\n'.replace("other = 1\n", "") + "\n" + BASE
+    assert parse(tomllib.loads(add_ignore_text(commented, "c"))).scan_ignore == ["a", "b", "c"]
+    assert "# things I never want" in add_ignore_text(commented, "c")
+    back = remove_ignore_text(both, "steam")
+    assert parse(tomllib.loads(back)).scan_ignore == ["cache"]
+    assert "# my backups" in back
+    assert remove_ignore_text(back, "nope") == back
+
+
+def test_ignore_text_rejects_a_bad_key():
+    from lifeboat.config import add_ignore_text
+    with pytest.raises(ConfigError, match="ignore"):
+        add_ignore_text(BASE, "")

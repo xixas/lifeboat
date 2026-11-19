@@ -417,7 +417,7 @@ def test_suggest_folders_falls_back_to_defaults_and_lists_only_existing(fake_hom
     got = {f["key"]: f for f in setup.suggest_folders()}
     assert list(got) == ["documents", "pictures", "ssh"]
     assert got["documents"] == {"key": "documents", "label": "Documents", "path": str(fake_home / "Documents"),
-                                "default_on": True, "secret": False, "group": "files", "kind": "dir", "exclude": [], "links": False}
+                                "default_on": True, "secret": False, "group": "files", "kind": "dir", "exclude": [], "links": False, "ignored": False}
     assert got["ssh"]["secret"] is True and got["ssh"]["path"] == str(fake_home / ".ssh") and got["ssh"]["default_on"] is True
 
 

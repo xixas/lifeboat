@@ -44,6 +44,7 @@ class Config:
     device_name: str = ""
     manifest: str = ""
     probe: str = ""
+    scan_ignore: list[str] = field(default_factory=list)
     path: Path = field(default_factory=lambda: config_path())
 
     def job(self, name: str) -> Job:
@@ -97,11 +98,11 @@ def _get(tbl: dict, where: str, key: str, typ, default):
 
 
 def parse(data: dict, path: Path | None = None) -> Config:
-    known = {"rclone", "schedule", "jobs", "settings", "modules", "device"}
+    known = {"rclone", "schedule", "jobs", "settings", "modules", "device", "scan"}
     for k in data:
         if k not in known:
             raise ConfigError(f"unknown section {k!r}")
-    rc, sch, st, mod, dev = (_table(data, k) for k in ("rclone", "schedule", "settings", "modules", "device"))
+    rc, sch, st, mod, dev, scn = (_table(data, k) for k in ("rclone", "schedule", "settings", "modules", "device", "scan"))
     cfg = Config(
         jobs=[],
         rclone_config=_get(rc, "rclone", "config", str, ""),
@@ -113,7 +114,11 @@ def parse(data: dict, path: Path | None = None) -> Config:
         device_name=_get(dev, "device", "name", str, ""),
         manifest=_get(dev, "device", "manifest", str, ""),
         probe=_get(dev, "device", "probe", str, ""),
+        scan_ignore=_get(scn, "scan", "ignore", list, []),
     )
+    for k in scn:
+        if k != "ignore":
+            raise ConfigError(f"scan.{k} is not a known key")
     if path is not None:
         cfg.path = path
     if not TIME_RE.match(cfg.daily_at):
@@ -178,6 +183,16 @@ def load_config(path: Path | str | None = None) -> Config:
     except tomllib.TOMLDecodeError as e:
         raise ConfigError(f"{p} is not valid TOML: {e}") from None
     return parse(data, p)
+
+
+def read_ignore(path: Path | str | None = None) -> list[str]:
+    """[scan] ignore from the config file; [] if there is no usable config (a scan must never fail over it)."""
+    try:
+        with open(path or config_path(), "rb") as f:
+            ignore = tomllib.load(f).get("scan", {}).get("ignore", [])
+    except (OSError, ValueError, AttributeError):
+        return []
+    return ignore if isinstance(ignore, list) and all(isinstance(k, str) for k in ignore) else []
 
 
 # ---------------------------------------------------------------- editing config.toml as text
@@ -262,6 +277,37 @@ def remove_job_text(text: str, name: str) -> str:
     new = "".join(s for i, s in enumerate(segs) if i != hits[0])
     validate_text(new)
     return new
+
+
+def _set_ignore(text: str, keys: list[str]) -> str:
+    """text with `ignore = [...]` under [scan] set to keys; the table is created if missing, comments around it stay."""
+    line = f"ignore = {json.dumps(keys, ensure_ascii=False)}"
+    segs = _segments(text)
+    for i, seg in enumerate(segs):
+        head = next((ln for ln in seg.splitlines() if ln.strip() and not ln.lstrip().startswith("#")), "")
+        if head.strip() == "[scan]":
+            new, n = re.subn(r"(?ms)^ignore\s*=\s*\[.*?\]", lambda _m: line, seg, count=1)
+            segs[i] = new if n else seg.rstrip("\n") + "\n" + line + "\n" + ("\n" if i < len(segs) - 1 else "")
+            out = "".join(segs)
+            break
+    else:
+        out = text.rstrip("\n") + "\n\n[scan]\n" + line + "\n"
+    validate_text(out)
+    return out
+
+
+def add_ignore_text(text: str, key: str) -> str:
+    """text with the item `key` added to [scan] ignore (once). Raises ConfigError for a bad key or an invalid result."""
+    if not NAME_RE.match(key):
+        raise ConfigError(f"scan.ignore: {key!r} is not an item key")
+    have = validate_text(text).scan_ignore
+    return text if key in have else _set_ignore(text, have + [key])
+
+
+def remove_ignore_text(text: str, key: str) -> str:
+    """text without `key` in [scan] ignore; unchanged if it was not there."""
+    have = validate_text(text).scan_ignore
+    return _set_ignore(text, [k for k in have if k != key]) if key in have else text
 
 
 def write_config_text(path: Path, text: str) -> None:

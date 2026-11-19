@@ -12,7 +12,7 @@ from gi.repository import Adw, GLib, Gtk  # noqa: E402
 from lifeboat import APP_ID, engine, found, timer  # noqa: E402
 from lifeboat.app.widgets import CSS, ICONS, WORDS, ago, fmt_time, group, label, row  # noqa: E402
 from lifeboat.app.wizard_state import tilde  # noqa: E402
-from lifeboat.config import example_config_path  # noqa: E402
+from lifeboat.config import example_config_path, load_config  # noqa: E402
 
 # pinned: never run an unpinned latest from npm
 SKILLS_CLI = "skills@1.7.4"
@@ -244,16 +244,35 @@ class PagesMixin:
 
     # -- skills
     def page_skills(self):
-        sk = self.st["skills"]
+        sk, cov = self.st["skills"], self.data["skills_cover"]
         pg = Adw.PreferencesPage()
-        pg.add(group(f"External · {sk['external_count']} · installed from source",
+        how = "backed up with ~/.agents" if cov["agents"] else "installed from source"
+        pg.add(group(f"External · {sk['external_count']} · {how}",
                      rows=[row(src, ", ".join(n), [label(str(len(n)), ["dim-label", "caption"])]) for src, n in sk["external"].items()]
                      or [row("None")]))
         if shutil.which("npx"):
             pg.add(group(rows=[self._box([self.button("Update external skills", lambda: self.stream(
                 "Update external skills", ["sh", "-c", f"npx -y {SKILLS_CLI} update -g </dev/null"]))])]))
-        pg.add(group(f"Yours · {len(sk['own'])}", rows=[row(", ".join(sk["own"]) or "None")]))
+        own = sk["own"]
+        if not own:
+            pg.add(group("Yours · 0", rows=[row("None")]))
+            return pg
+        if cov["backed_up"]:
+            r, mark = row(", ".join(own)), "ok"
+        else:
+            why = ("Not in any backup job: " + ", ".join(cov["missing"])) if cov["missing"] else \
+                "The last backup is more than 2 days old, or it did not succeed."
+            r, mark = row(", ".join(own), why), "warn"
+            if cov["fix"]:
+                r.add_suffix(self.button("Add to Backup", self.add_skills_to_backup, ("suggested-action",), False))
+        r.add_prefix(Gtk.Image(icon_name=ICONS[mark], css_classes=[CSS[mark]]))
+        pg.add(group(f"Yours · {len(own)} · " + ("backed up" if cov["backed_up"] else "not backed up"), rows=[r]))
         return pg
+
+    def add_skills_to_backup(self):
+        path, items = self.cfg.path, self.data["skills_cover"]["fix"]
+        self.in_thread(lambda: [found.add_item(load_config(path), i) for i in items],
+                       lambda done: (self.toast(f"Added {len(done)} to your backup"), self.refresh()))
 
     # -- how it works
     def page_help(self):

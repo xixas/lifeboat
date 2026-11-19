@@ -273,7 +273,7 @@ shot("03-folders")
 import lifeboat.found as lifeboat_found
 lifeboat_found.apply_ignore = lambda path, keys: calls.append(("ignore", keys))
 titles = [g.get_title() for g in wiz.found.groups if g.get_visible()]
-assert titles == ["Files · 2", "AI assistants · 1", "Keys &amp; logins · 1", "Not backed up: rebuildable or huge · 1",
+assert titles == ["Files · 2", "AI assistants · 1", "Shell &amp; terminal · 2", "Keys &amp; logins · 1", "Not backed up: rebuildable or huge · 1",
                   "Other app settings · 1"], titles
 assert "encrypted" in wiz.found.groups[1].get_description() and not wiz.found.groups[0].get_description()
 assert not wiz.found.ignored_group.get_visible()
@@ -1310,7 +1310,7 @@ win.apply(gather())
 win.show_page("overview")
 text = labels(win)
 assert "No longer backed up" in text and "~/.claude, ~/Old" in text, text
-assert "3 new items found" in text, text
+assert "5 new items found" in text, text
 shot("12-overview-alerts", win.get_content())
 click(win, "Add back")  # ~/.claude has a catalogue item; ~/Old does not
 assert pump(lambda: any(j.name == "claude-code" for j in config.load_config(cfg_path).jobs)), "not added back"
@@ -1320,13 +1320,43 @@ assert [b.get_label() for b in buttons(win)].count("Add back") == 0  # nothing l
 click(win, "Dismiss")
 assert pump(lambda: "No longer backed up" not in labels(win)), labels(win)
 assert engine.dropped_sources() == []
-assert "2 new items found" in labels(win)
+assert "4 new items found" in labels(win)
 click(win, "Review")  # looking at them is what makes them no longer new
 assert pump(lambda: seen_mod.read_seen() >= {"ssh", "pictures", "claude"}), seen_mod.read_seen()
 print("OVERVIEW OK")
 '''
 
+SKILLS_BODY = r'''
+from lifeboat import config, engine
+HOME = Path(sys.argv[1])
+cfg_path = config.config_path()
+docs_choice = {"key": "documents", "label": "Documents", "path": str(HOME / "Documents"), "secret": False}
+setup._write_new_config(cfg_path, "laptop", "13:00", setup.wizard_jobs("laptop", [docs_choice]))
+engine.write_json("last-run.json", {"time": datetime.now(timezone.utc).isoformat(), "ok": True, "dry_run": False, "jobs": []})
+repo = HOME / "src" / "my-skills"
+(repo / ".git").mkdir(parents=True)
+(repo / "skills" / "mine").mkdir(parents=True)
+(HOME / ".claude" / "skills").mkdir(parents=True)
+(HOME / ".claude" / "skills" / "mine").symlink_to(repo / "skills" / "mine")
+(HOME / ".agents").mkdir()
+win = Win(None)
+win.present()
+win.apply(gather())
+win.show_page("skills")
+text = labels(win)
+assert "Yours · 1 · not backed up" in text and "Not in any backup job: mine" in text, text
+assert not any(t.startswith("External") and "backed up with" in t for t in text)
+shot("13-skills-not-backed-up", win.get_content())
+click(win, "Add to Backup")
+assert pump(lambda: "Yours · 1 · backed up" in labels(win)), labels(win)
+assert "Add to Backup" not in [b.get_label() for b in buttons(win)]
+assert any(j.source == str(repo) or j.source.endswith("/src/my-skills") for j in config.load_config(cfg_path).jobs)
+shot("14-skills-backed-up", win.get_content())
+print("SKILLS OK")
+'''
+
 WIZARD_SCRIPT = PRELUDE + SETUP_BODY
+SKILLS_SCRIPT = PRELUDE + SKILLS_BODY
 OVERVIEW_SCRIPT = PRELUDE + OVERVIEW_BODY
 FOUND_SCRIPT = PRELUDE + FOUND_BODY
 RESTORE_SCRIPT = PRELUDE + RESTORE_BODY
@@ -1337,7 +1367,7 @@ def run_broadway(env, script, expect):
     if not shutil.which("gtk4-broadwayd"):
         pytest.skip("gtk4-broadwayd not available")
     home = env / "home"
-    for d in ("Documents", "Pictures", ".ssh", "Extra", ".claude", ".cache", ".config/inkscape"):
+    for d in ("Documents", "Pictures", ".ssh", "Extra", ".claude", ".cache", ".config/inkscape", ".config/zsh", ".config/fish"):
         (home / d).mkdir(parents=True)
         (home / d / "f.txt").write_text("x")
     bw = subprocess.Popen(["gtk4-broadwayd", BROADWAY], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -1379,3 +1409,7 @@ def test_found_dialog_adds_jobs_and_persists_ignore(env):
 
 def test_overview_alerts_for_dropped_and_new_items(env):
     run_broadway(env, OVERVIEW_SCRIPT, "OVERVIEW OK")
+
+
+def test_skills_page_says_whether_your_skills_are_backed_up(env):
+    run_broadway(env, SKILLS_SCRIPT, "SKILLS OK")

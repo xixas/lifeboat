@@ -44,7 +44,7 @@ class FoundList:
             for i in members:
                 row = make_row(i)
                 if i["secret"] and not encrypted:
-                    row.add_prefix(Gtk.Image.new_from_icon_name("system-lock-screen-symbolic", tooltip_text="Encrypted"))
+                    row.add_prefix(Gtk.Image(icon_name="system-lock-screen-symbolic", tooltip_text="Encrypted"))
                 btn = Gtk.Button(label="Ignore", valign=Gtk.Align.CENTER, css_classes=["flat"], tooltip_text="Stop suggesting this")
                 btn.connect("clicked", lambda *_, i=i: self._ignore(i))
                 row.add_suffix(btn)

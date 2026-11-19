@@ -9,7 +9,7 @@ gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
 from gi.repository import Adw, Gio, GLib, Gtk  # noqa: E402
 
-from lifeboat import APP_ID, catalogue, engine, found  # noqa: E402
+from lifeboat import APP_ID, catalogue, engine, found, skills  # noqa: E402
 from lifeboat.app.found import FoundDialog  # noqa: E402
 from lifeboat.app.pages import PAGE_ICONS, PAGE_NAMES, PagesMixin  # noqa: E402
 from lifeboat.app.progress import BackupProgress, plan  # noqa: E402
@@ -33,12 +33,15 @@ def gather() -> dict:
         return {"kind": "error", "path": path, "error": str(e)}
     st = engine.status(cfg)
     d = {"kind": "ok", "path": path, "cfg": cfg, "st": st, "new_items": [], "dropped_items": [(s, None) for s in st["dropped"]]}
+    items = []
     try:  # the scan only adds alerts: if it fails the window still shows the status
         items = catalogue.scan(Path.home())
         d["new_items"] = found.unseen_new_items(items, cfg)
         d["dropped_items"] = found.match_dropped(st["dropped"], items)
     except OSError as e:
         print("scan failed:", e, file=sys.stderr)
+    if st["skills"] is not None:
+        d["skills_cover"] = skills.coverage(cfg, st["last"], st["skills"]["own"], items)
     return d
 
 

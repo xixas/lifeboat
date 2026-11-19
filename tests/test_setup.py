@@ -843,13 +843,19 @@ def test_an_old_manifest_without_the_new_fields_still_loads(wiz):
     assert cfg.jobs[0].exclude == setup.JUNK_EXCLUDES and cfg.jobs[0].links is False
 
 
-def test_a_job_that_would_back_up_the_whole_home_is_refused():
-    base = {"name": "j", "source": "~", "dest": "x:j", "old": "x:_old"}
-    with pytest.raises(config.ConfigError, match="whole home"):
-        config.parse({"jobs": [base]})
-    assert config.parse({"jobs": [{**base, "include": ["/.zshrc"]}]})
-    assert config.parse({"jobs": [{**base, "filter_file": "f.txt"}]})
-    assert config.parse({"jobs": [{**base, "source": "~/Documents"}]})
+def test_a_hand_written_home_job_with_excludes_still_loads():
+    # Valid before 0.5: a user's own config must keep loading after the upgrade.
+    assert config.parse({"jobs": [{"name": "j", "source": "~", "dest": "x:j", "old": "x:_old", "exclude": ["/.cache/**"]}]})
+
+
+def test_a_restored_job_that_would_back_up_the_whole_home_is_refused():
+    base = {"name": "j", "source": "~", "dest": "x:j", "old": "x:_old", "encrypted": True}
+    for src in ("~", "~/", "~/."):
+        with pytest.raises(config.ConfigError, match="whole home"):
+            setup._manifest_jobs({"jobs": [{**base, "source": src}]})
+    assert setup._manifest_jobs({"jobs": [{**base, "include": ["/.zshrc"]}]})
+    assert setup._manifest_jobs({"jobs": [{**base, "filter_file": "f.txt"}]})
+    assert setup._manifest_jobs({"jobs": [{**base, "source": "~/Documents"}]})
 
 
 def test_folders_with_the_same_name_get_unique_job_names_and_destinations(wiz, fake_home):

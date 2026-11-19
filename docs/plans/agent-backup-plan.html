@@ -38,7 +38,9 @@
 [{ "id": "r1", "label": "Round 1", "timestamp": "2026-11-19T12:30:00+05:30", "summary": "Found-on-this-laptop screen with groups and Ignore; GitHub config store you can share" },
  { "id": "r2", "label": "Round 2", "timestamp": "2026-11-19T12:45:00+05:30", "summary": "Store layer uses skillshare instead of custom code" },
  { "id": "r3", "label": "Round 3", "timestamp": "2026-11-19T13:00:00+05:30", "summary": "skillshare UI, repo connection and naming; coverage-drop alert" },
- { "id": "r4", "label": "Round 4", "timestamp": "2026-11-19T13:15:00+05:30", "summary": "GitHub for setup, Drive for files and secrets; skillshare v0.30.11; Ignore button" }]
+ { "id": "r4", "label": "Round 4", "timestamp": "2026-11-19T13:15:00+05:30", "summary": "GitHub for setup, Drive for files and secrets; skillshare v0.30.11; Ignore button" },
+ { "id": "r5", "label": "Round 5", "timestamp": "2026-11-19T15:00:00+05:30", "summary": "Release 0.6 connect flow, from a hands-on skillshare test" },
+ { "id": "r6", "label": "Round 6", "timestamp": "2026-11-19T15:30:00+05:30", "summary": "Fable pre-mortem: GitHub App, keyring token, pre-push secret hook, no sync, built-in hash" }]
 </script>
 <style>
   .flow text { font-family: system-ui, sans-serif; }
@@ -220,6 +222,53 @@
   </div>
 </section>
 
+<!-- RELEASE 0.6 -->
+<section class="space-y-4" data-lavish-revision="r5">
+  <h2 class="text-2xl font-bold">Release 0.6 · Connecting the store, step by step</h2>
+  <p class="opacity-70">Based on a hands-on test of skillshare v0.30.11 in a throwaway home.</p>
+  <div class="grid md:grid-cols-4 gap-4 items-start">
+    <div class="space-y-2"><div class="font-semibold">1 · Install</div>
+      <div class="adw"><div class="body space-y-2">
+        <div class="boxed"><div class="row"><span class="ok">✓</span><div class="flex-1"><div class="t">skillshare 0.30.11</div><div class="s">Downloaded, checksum verified</div></div></div></div>
+        <div class="s" style="font-size:12px;color:#ffffffa0">Into ~/.local/bin. Never runs the curl | sh installer.</div>
+      </div></div></div>
+    <div class="space-y-2"><div class="font-semibold">2 · Pick your skills</div>
+      <div class="adw"><div class="body space-y-2">
+        <div class="boxed">
+          <div class="row"><span class="ok">●</span><div class="flex-1"><div class="t">Use ~/projects/claude-config</div><div class="s">Found from your skill links · 37 skills</div></div></div>
+          <div class="row"><span class="more">○</span><div class="flex-1"><div class="t">Start a new store</div><div class="s">~/.config/skillshare</div></div></div>
+        </div>
+        <div class="s" style="font-size:12px;color:#ffffffa0">Existing skills are never moved or replaced.</div>
+      </div></div></div>
+    <div class="space-y-2"><div class="font-semibold">3 · Connect GitHub</div>
+      <div class="adw"><div class="body space-y-2 text-center">
+        <div class="btn blue">Sign in with GitHub</div>
+        <div class="s" style="font-size:12px;color:#ffffffa0">Code <b style="color:#fff">K7QF-2M9D</b></div>
+        <div class="boxed text-left"><div class="row"><div class="flex-1"><div class="t">1. Create repo on GitHub</div><div class="s">skillshare-source, private</div></div></div><div class="row"><div class="flex-1"><div class="t">2. Install Lifeboat on it</div><div class="s">only that repo</div></div></div></div>
+      </div></div></div>
+    <div class="space-y-2"><div class="font-semibold">4 · Daily, after backups</div>
+      <div class="adw"><div class="body space-y-2">
+        <div class="boxed">
+          <div class="row"><span class="ok">✓</span><div class="flex-1"><div class="t">Secret check</div><div class="s">Blocks the push on any finding</div></div></div>
+          <div class="row"><span class="ok">✓</span><div class="flex-1"><div class="t">Pushed 13:02</div><div class="s">3 changes</div></div></div>
+        </div>
+        <div class="text-center"><span class="btn">Open skillshare</span></div>
+      </div></div></div>
+  </div>
+  <div class="overflow-x-auto rounded-box border border-base-content/10 bg-base-100">
+    <table class="table table-sm">
+      <thead><tr><th>What the test found</th><th>So Lifeboat will</th></tr></thead>
+      <tbody>
+        <tr><td>skillshare <b>pushes secrets</b> without checking (a fake AWS key and token went through)</td><td>Run its own scan before every push and block on any finding; add a .gitignore for .env, keys and credentials</td></tr>
+        <tr><td>It can't create a GitHub repo; it uses your normal git login</td><td>Create the repo itself after GitHub sign-in, and give git the login</td></tr>
+        <tr><td>Git status (ahead, behind, uncommitted) is only in its web UI</td><td>Read the git state directly from the folder</td></tr>
+        <tr><td>It can adopt an existing repo (<code>--source</code>) without touching it</td><td>Offer your claude-config as the store; no migration needed</td></tr>
+        <tr><td>It checks for updates online on every command</td><td>Turn that off; Lifeboat handles the pinned version</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
 <!-- DECISIONS -->
 <section class="space-y-3">
   <h2 class="text-2xl font-bold">Decisions</h2>
@@ -228,6 +277,12 @@
       <thead><tr><th>Question</th><th>Proposed</th><th>Why</th></tr></thead>
       <tbody data-lavish-revision="r1">
         <tr data-lavish-revision="r4"><td>What goes where</td><td><b>GitHub (via skillshare):</b> skills, agents, rules, hooks, MCP · <b>Drive:</b> files and secrets</td><td>Shareable setup gets git history; secrets and personal files never touch GitHub</td></tr>
+        <tr data-lavish-revision="r7"><td>Repo creation</td><td><b>The user creates it</b> on github.com (name prefilled), then installs the app on it</td><td>Live test: the app can only create repos after being installed on an existing one</td></tr>
+        <tr data-lavish-revision="r6"><td>GitHub sign-in</td><td><b>A GitHub App</b> (not an OAuth app), installed on the store repo only; device code sign-in</td><td>An OAuth app needs <code>repo</code>: never-expiring access to every repo you can reach, client orgs included</td></tr>
+        <tr data-lavish-revision="r6"><td>Token</td><td><b>Desktop keyring</b>, passed to git per command</td><td>A global git login would take over your Tweelin pushes</td></tr>
+        <tr data-lavish-revision="r6"><td>Secret check</td><td><b>A git pre-push hook</b> scanning every unpushed commit</td><td>Your chezmoi script pushes the same repo, so a daily check alone misses its commits</td></tr>
+        <tr data-lavish-revision="r6"><td>skillshare commands</td><td><b>Never <code>sync</code></b>; only init, status, push, ui</td><td>Untested against your 37 linked + 20 real skills</td></tr>
+        <tr data-lavish-revision="r6"><td>Binary check</td><td><b>Hash built into Lifeboat</b>, installed outside PATH</td><td>A checksum file from the same release proves nothing if the release is swapped</td></tr>
         <tr data-lavish-revision="r3"><td>Alerts</td><td><b>Also alert when coverage drops</b></td><td>Today it alerts on failed or stale runs only. Removing jobs on 2 Nov raised nothing, because nothing failed</td></tr>
         <tr data-lavish-revision="r2"><td>Store engine</td><td><b>skillshare v0.30.11</b>, pinned</td><td>Your call; it is 2 days old, so the pin is bumped deliberately</td></tr>
         <tr><td>Store sign-in</td><td><b>GitHub device code</b>, like <code>gh auth login</code></td><td>No pasted tokens</td></tr>

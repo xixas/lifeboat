@@ -190,6 +190,7 @@ def test_status_and_problems_flag_failure_and_staleness(tmp_path, make_cfg, cloc
 
     cfg.jobs[0].source = str(tmp_path / "nope")
     engine.run_backup(cfg, now=clock(9))
+    engine.ack_dropped()  # pointing the job elsewhere also drops the old folder; this test is about the failed run
     st = engine.status(cfg)
     assert st["status"]["backups"] == "error"
     (p,) = engine.problems(cfg, st)

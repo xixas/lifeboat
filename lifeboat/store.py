@@ -199,9 +199,13 @@ def run_daily(cfg: Config, gh=None) -> dict | None:
     except (OSError, RuntimeError) as e:
         result["error"] = f"could not install the pre-push check: {e}"
         return _record(result)
-    found = secretscan.scan_working_tree(repo)
-    if before["last_commit_time"]:
-        found += secretscan.scan_range(repo, None, "HEAD")
+    try:  # strict: without a working gitleaks nothing is pushed (the pre-push hook alone may skip it; this push must not)
+        found = secretscan.scan_working_tree(repo, strict=True)
+        if before["last_commit_time"]:
+            found += secretscan.scan_range(repo, None, "HEAD", strict=True)
+    except secretscan.ScannerUnavailable as e:
+        result["error"] = f"Secret scanner unavailable ({e}); nothing was pushed"
+        return _record(result)
     if found:
         result["blocked_findings"] = [{k: f[k] for k in ("file", "line", "rule", "commit") if k in f} for f in found]
         out = _git(repo, "rev-parse", "--abbrev-ref", "@{u}")

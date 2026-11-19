@@ -13,6 +13,8 @@ import sys
 import tempfile
 from pathlib import Path
 
+from lifeboat import store_install
+
 RULES = {
     "aws-access-key": r"\b(?:AKIA|ASIA)[0-9A-Z]{16}\b",
     "github-token": r"\b(?:gh[pousr]_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{22,})",
@@ -22,12 +24,18 @@ RULES = {
     "anthropic-key": r"\bsk-ant-[A-Za-z0-9_-]{20,}",
     "openai-key": r"\bsk-[A-Za-z0-9_-]{20,}",
     "jwt": r"\beyJ[A-Za-z0-9_-]{5,}\.eyJ[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}",
-    "generic-secret": r"""(?i)(?:api[_-]?key|secret|token|password)\s*[:=]\s*['"]?([A-Za-z0-9/+_\-]{16,})""",
+    "generic-secret": r"""(?i)(?:api[_-]?key|secret|token|password)['"]?\s*[:=]\s*['"]?([A-Za-z0-9/+_\-]{16,})""",  # also JSON: "JOPLIN_TOKEN": "..."
+    "bearer-token": r"(?i)\bBearer\s+([A-Za-z0-9._~+/=-]{16,})",
 }
+NEEDS_RANDOM = ("generic-secret", "bearer-token")  # a name like "github_installation_token" or "<token>" is not a value
 PATTERNS = {name: re.compile(rx) for name, rx in RULES.items()}
 RISKY_NAMES = (".env", ".env.*", "id_rsa*", "*.pem", "*.key", "*credentials*", "*.p8", "*.p12")
 HOOK_MARK = "# lifeboat-secretscan"
 ZERO = "0" * 40
+
+
+class ScannerUnavailable(RuntimeError):
+    """gitleaks is not installed, or did not run: with strict=True the scan stops instead of trusting Lifeboat's own rules alone."""
 
 
 def _git(repo, *args: str) -> str:
@@ -73,7 +81,7 @@ def _scan_text(file: str, lines, first_line: int = 1) -> list[dict]:
     for n, text in enumerate(lines, first_line):
         for rule, rx in PATTERNS.items():
             m = rx.search(text)
-            if m and (rule != "generic-secret" or _looks_random(m.group(1))):
+            if m and (rule not in NEEDS_RANDOM or _looks_random(m.group(1))):
                 out.append(_finding(file, n, rule))
                 break  # one finding per line
     return out
@@ -84,20 +92,79 @@ def _risky_name(path: str) -> bool:
     return any(fnmatch.fnmatch(name, p) for p in RISKY_NAMES)
 
 
-def _gitleaks(repo, base, head) -> list[dict]:
-    exe = shutil.which("gitleaks")
+GITLEAKS_CONFIG = "[extend]\nuseDefault = true\n"  # gitleaks' own rules; a .gitleaks.toml in the scanned repo is never read
+GITLEAKS_TIMEOUT = 300
+
+
+def _run_gitleaks(sub: str, target: str, extra: list[str], cwd: str) -> list[dict]:
+    """One gitleaks run with Lifeboat's pinned binary and fixed settings; its report as a list. ScannerUnavailable if it is missing
+    or does not run cleanly. --redact keeps the secret itself out of the report, so it never reaches a finding."""
+    exe = store_install.gitleaks_path()
     if not exe:
-        return []
-    with tempfile.TemporaryDirectory() as tmp:
-        report = Path(tmp) / "report.json"
-        opts = f"{base}..{head}" if base else f"{head} --not --remotes"
-        cmd = [exe, "git", f"--log-opts={opts}", "--report-format=json", f"--report-path={report}", "--no-banner", "--redact", "--exit-code=0", str(repo)]
+        raise ScannerUnavailable("gitleaks is not installed")
+    with tempfile.TemporaryDirectory(prefix="lifeboat-gitleaks-") as tmp:
+        report, config, ignore = Path(tmp) / "report.json", Path(tmp) / "gitleaks.toml", Path(tmp) / "ignore"
+        config.write_text(GITLEAKS_CONFIG)
+        ignore.mkdir()
+        cmd = [str(exe), sub, "--no-banner", "--report-format", "json", "--report-path", str(report), "--redact", "--exit-code", "0",
+               "-c", str(config), "-i", str(ignore), "--ignore-gitleaks-allow", *extra, target]
         try:
-            subprocess.run(cmd, capture_output=True, text=True, timeout=120, check=False)
-            data = json.loads(report.read_text() or "[]")
-        except (OSError, ValueError, subprocess.TimeoutExpired):
-            return []
-    return [_finding(d.get("File", ""), d.get("StartLine", 0), d.get("RuleID", "gitleaks"), "gitleaks") for d in data]
+            r = subprocess.run(cmd, capture_output=True, text=True, timeout=GITLEAKS_TIMEOUT, check=False, cwd=cwd)
+            data = json.loads(report.read_text())
+        except (OSError, ValueError, subprocess.TimeoutExpired) as e:
+            raise ScannerUnavailable(f"gitleaks did not run: {type(e).__name__}") from e
+    if r.returncode != 0 or not isinstance(data, list):
+        raise ScannerUnavailable(f"gitleaks exited {r.returncode}")
+    return data
+
+
+def _from_report(data: list[dict], strip: bool = False) -> list[dict]:
+    out = []
+    for d in data:
+        f = _finding(d.get("File", ""), d.get("StartLine", 0), d.get("RuleID", "gitleaks"), "gitleaks")
+        if strip:  # a dir scan reports "./index/<path>" or "work/<path>": the first folder is which copy it was
+            f["file"] = f["file"].removeprefix("./").split("/", 1)[-1]
+        if d.get("Commit"):
+            f["commit"] = d["Commit"][:7]
+        out.append(f)
+    return out
+
+
+def _layer(strict: bool, scan, *args) -> list[dict]:
+    """gitleaks findings from `scan`; if it cannot run, strict stops the whole scan and otherwise Lifeboat's own rules stand alone."""
+    try:
+        return scan(*args)
+    except ScannerUnavailable as e:
+        if strict:
+            raise
+        print(f"lifeboat: {e}; used Lifeboat's own secret rules only", file=sys.stderr)
+        return []
+
+
+def _gitleaks_commits(top: str, base, head) -> list[dict]:
+    opts = f"{head} --not --remotes" + (f" {base}" if base else "")
+    return _from_report(_run_gitleaks("git", top, [f"--log-opts={opts}"], top))
+
+
+def _gitleaks_tree(top: str, staged: list[str], edited: list[str]) -> list[dict]:
+    """gitleaks over a temp copy of what is staged (read from the index) and of the files edited or untracked, as two folders."""
+    with tempfile.TemporaryDirectory(prefix="lifeboat-export-") as tmp:
+        for folder, names, read in (("index", staged, lambda f: _git_bytes(top, "cat-file", "blob", f":{f}")),
+                                    ("work", edited, lambda f: _read_file(Path(top) / f))):
+            for f in names:
+                data = read(f)
+                if data is not None and ".." not in Path(f).parts:
+                    dest = Path(tmp) / folder / f
+                    dest.parent.mkdir(parents=True, exist_ok=True)
+                    dest.write_bytes(data)
+        return _from_report(_run_gitleaks("dir", ".", [], tmp), strip=True)
+
+
+def _read_file(path: Path) -> bytes | None:
+    try:
+        return path.read_bytes() if path.is_file() and not path.is_symlink() else None
+    except OSError:
+        return None
 
 
 def _git_bytes(repo, *args: str) -> bytes:
@@ -130,7 +197,7 @@ def _changed(repo, commit: str) -> list[tuple[str, str]]:
     return out
 
 
-def scan_range(repo, base: str | None = None, head: str = "HEAD") -> list[dict]:
+def scan_range(repo, base: str | None = None, head: str = "HEAD", strict: bool = False) -> list[dict]:
     """Findings in the whole content of every file each unpushed commit adds or changes (`head`, minus whatever any remote-tracking
     ref and `base` already have), one commit at a time (`commit` is a short sha). It never needs to know what the remote holds."""
     top = _top(repo)
@@ -143,7 +210,7 @@ def scan_range(repo, base: str | None = None, head: str = "HEAD") -> list[dict]:
             found += [{**f, "file": path, "commit": sha[:7]} for f in by_blob[blob]]
             if _risky_name(path):
                 found.append({**_finding(path, 0, "risky-file-name"), "commit": sha[:7]})
-    return _allowed(top, _dedupe(found + _gitleaks(top, base, head)))
+    return _allowed(top, _dedupe(found + _layer(strict, _gitleaks_commits, top, base, head)))
 
 
 def _dedupe(found: list[dict]) -> list[dict]:
@@ -156,24 +223,22 @@ def _dedupe(found: list[dict]) -> list[dict]:
     return out
 
 
-def scan_working_tree(repo) -> list[dict]:
+def scan_working_tree(repo, strict: bool = False) -> list[dict]:
     """Findings in changes not committed yet, whole files: what is staged (read from the index, so a file cleaned after `git add` still counts),
     tracked files edited since, and untracked files that are not ignored (what `skillshare push` would commit)."""
     top = _top(repo)
     found, names = [], []
-    for f in _paths(_git(top, "diff", "--cached", "--name-only", "-z", "--diff-filter=ACMRT", "--no-renames")):
+    staged = _paths(_git(top, "diff", "--cached", "--name-only", "-z", "--diff-filter=ACMRT", "--no-renames"))
+    for f in staged:
         names.append(f)
         found += _scan_bytes(f, _git_bytes(top, "cat-file", "blob", f":{f}"))
     edited = _paths(_git(top, "diff", "--name-only", "-z", "--diff-filter=ACMRT", "--no-renames")) + _paths(_git(top, "ls-files", "--others", "--exclude-standard", "-z"))
     for f in edited:
         names.append(f)
-        path = Path(top) / f
-        try:
-            if path.is_file() and not path.is_symlink():
-                found += _scan_bytes(f, path.read_bytes())
-        except OSError:
-            pass
-    return _allowed(top, _dedupe(found + [_finding(f, 0, "risky-file-name") for f in names if _risky_name(f)]))
+        if (data := _read_file(Path(top) / f)) is not None:
+            found += _scan_bytes(f, data)
+    found += [_finding(f, 0, "risky-file-name") for f in names if _risky_name(f)] + _layer(strict, _gitleaks_tree, top, staged, edited)
+    return _allowed(top, _dedupe(found))
 
 
 def scan_pre_push(repo, stdin_text: str) -> list[dict]:

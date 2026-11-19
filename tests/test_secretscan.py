@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from lifeboat import secretscan
+from lifeboat import secretscan, store_install
 
 AWS = "AKIA" + "IOSFODNN7EXAMPLE"
 GH = "ghp_" + "a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6q7R8"
@@ -19,6 +19,7 @@ _REAL_CMD = getattr(secretscan, "_lifeboat_cmd", None)
 @pytest.fixture(autouse=True)
 def no_gitleaks(monkeypatch):
     monkeypatch.setattr(secretscan.shutil, "which", lambda name: None)
+    monkeypatch.setattr(store_install, "gitleaks_path", lambda: None)
     monkeypatch.setattr(secretscan, "_lifeboat_cmd", lambda: ["/nonexistent/bin/lifeboat"])  # no `lifeboat` of this machine's is found by absolute path
 
 
@@ -100,19 +101,115 @@ def test_risky_file_names(repo, name):
     assert [(f["file"], f["rule"]) for f in found] == [(f"x/{name}", "risky-file-name")]
 
 
-def test_gitleaks_findings_are_merged(repo, tmp_path, monkeypatch):
-    fake = tmp_path / "bin" / "gitleaks"
-    fake.parent.mkdir()
-    fake.write_text('#!/bin/sh\nargs="$*"\nfor a; do case $a in --report-path=*) out=${a#--report-path=};; esac; done\n'
-                    'echo "$args" > "$0.args"\n'
-                    'echo \'[{"File":"deep.txt","StartLine":4,"RuleID":"custom-rule","Secret":"s3cret"}]\' > "$out"\nexit 0\n')
-    fake.chmod(0o755)
-    monkeypatch.setattr(secretscan.shutil, "which", lambda name: str(fake))
+def test_gitleaks_findings_are_merged_with_lifeboats_own(repo, fake_gitleaks):
+    fake_gitleaks(git=[{"File": "deep.txt", "StartLine": 4, "RuleID": "custom-rule", "Secret": "REDACTED", "Commit": "abcdef0123456789"}])
+    base = git(repo, "rev-parse", "HEAD")
+    head = commit(repo, {"a.txt": f"{AWS}\n"})
+    found = secretscan.scan_range(repo, base, head)
+    assert {(f["file"], f["line"], f["rule"], f["source"], f.get("commit")) for f in found} == {
+        ("deep.txt", 4, "custom-rule", "gitleaks", "abcdef0"), ("a.txt", 1, "aws-access-key", "lifeboat", head[:7])}
+    call = next(ln for ln in fake_gitleaks.log().splitlines() if ln.startswith("git|"))
+    for want in ("--no-banner", "--report-format json", "--report-path ", "--redact", "--ignore-gitleaks-allow",
+                 f"--log-opts={head} --not --remotes {base}"):  # ignore-allow: a repo's own comments cannot switch rules off
+        assert want in call, call
+
+
+def test_gitleaks_uses_lifeboats_config_not_the_repos(repo, fake_gitleaks):
+    fake_gitleaks()
+    (repo / ".gitleaks.toml").write_text("[allowlist]\npaths = ['.*']\n")
+    git(repo, "add", "-A")
+    git(repo, "commit", "-qm", "cfg")
+    secretscan.scan_range(repo, None, "HEAD")
+    call = next(ln for ln in fake_gitleaks.log().splitlines() if ln.startswith("git|"))
+    assert " -c " in call or " --config" in call
+    assert str(repo / ".gitleaks.toml") not in call
+
+
+def test_the_index_and_working_tree_are_exported_and_scanned_by_gitleaks(repo, fake_gitleaks):
+    fake_gitleaks(dir=[{"File": "index/staged.txt", "StartLine": 2, "RuleID": "generic-api-key", "Secret": "REDACTED"},
+                       {"File": "./work/new.txt", "StartLine": 1, "RuleID": "generic-api-key", "Secret": "REDACTED"}])
+    (repo / "staged.txt").write_text("a\nb\n")
+    git(repo, "add", "staged.txt")
+    (repo / "new.txt").write_text("fresh\n")
+    found = secretscan.scan_working_tree(repo)
+    assert {(f["file"], f["line"], f["rule"], f["source"]) for f in found} == {
+        ("staged.txt", 2, "generic-api-key", "gitleaks"), ("new.txt", 1, "generic-api-key", "gitleaks")}
+    log = fake_gitleaks.log()
+    assert "FILE ./index/staged.txt" in log and "FILE ./work/new.txt" in log
+    assert "--redact" in log
+
+
+def test_a_missing_gitleaks_fails_closed_when_asked_to(repo):
+    with pytest.raises(secretscan.ScannerUnavailable):
+        secretscan.scan_working_tree(repo, strict=True)
     base = git(repo, "rev-parse", "HEAD")
     head = commit(repo, {"a.txt": "fine\n"})
+    with pytest.raises(secretscan.ScannerUnavailable):
+        secretscan.scan_range(repo, base, head, strict=True)
+    assert secretscan.scan_range(repo, base, head) == []  # the hook's layer keeps Lifeboat's own rules
+
+
+def test_a_gitleaks_that_the_path_offers_is_never_used(repo, tmp_path, monkeypatch):
+    other = tmp_path / "pathbin"
+    other.mkdir()
+    (other / "gitleaks").write_text("#!/bin/sh\nexit 0\n")
+    (other / "gitleaks").chmod(0o755)
+    monkeypatch.setenv("PATH", f"{other}{os.pathsep}{os.environ['PATH']}")
+    monkeypatch.setattr(secretscan.shutil, "which", lambda name: str(other / name))
+    with pytest.raises(secretscan.ScannerUnavailable):
+        secretscan.scan_working_tree(repo, strict=True)
+
+
+@pytest.mark.parametrize("how", ["exit-2", "bad-json", "no-report"])
+def test_a_gitleaks_that_fails_to_run_fails_closed(repo, fake_gitleaks, how):
+    exe = fake_gitleaks()
+    if how == "exit-2":
+        fake_gitleaks(rc=2)
+    elif how == "bad-json":
+        Path(f"{exe}.dir.json").write_text("not json")
+        Path(f"{exe}.git.json").write_text("not json")
+    else:
+        exe.write_text("#!/bin/sh\nexit 0\n")
+    with pytest.raises(secretscan.ScannerUnavailable):
+        secretscan.scan_working_tree(repo, strict=True)
+    base = git(repo, "rev-parse", "HEAD")
+    head = commit(repo, {"a.txt": "fine\n"})
+    with pytest.raises(secretscan.ScannerUnavailable):
+        secretscan.scan_range(repo, base, head, strict=True)
+
+
+MCP = ('{"mcpServers": {"joplin": {"env": {"JOPLIN_TOKEN": "9f8a3c1d5e7b2a4c6e8f0a1b3c5d7e9f2a4b6c8d0e1f3a5b7c9d1e3f5a7b9c1d"}},'
+       ' "x": {"api_key": "Zk3Jq9XvT2mP7LwN4RbY8sD1fHgC6aUe"}}}\n')
+
+
+@pytest.mark.parametrize("name,text,rule", [
+    ("mcp.json", MCP, "generic-secret"),
+    ("mcp.json", '{"env": {"JOPLIN_TOKEN": "9f8a3c1d5e7b2a4c6e8f0a1b3c5d7e9f2a4b6c8d"}}\n', "generic-secret"),
+    ("mcp.json", '{"api_key": "Zk3Jq9XvT2mP7LwN4RbY8sD1fHgC6aUe"}\n', "generic-secret"),
+    ("h.txt", "Authorization: Bearer q8Zk3Jv9XtT2mP7LwN4RbY8sD1fHgC6aUeQ5\n", "bearer-token"),
+    ("h.txt", 'curl -H "Authorization: Bearer q8Zk3Jv9XtT2mP7LwN4RbY8sD1fHgC6aUeQ5"\n', "bearer-token"),
+])
+def test_lifeboats_own_rules_catch_json_keys_and_bearer_headers(repo, name, text, rule):
+    base = git(repo, "rev-parse", "HEAD")
+    head = commit(repo, {name: text})
     found = secretscan.scan_range(repo, base, head)
-    assert found == [{"file": "deep.txt", "line": 4, "rule": "custom-rule", "source": "gitleaks"}]
-    assert f"--log-opts={base}..{head}" in Path(str(fake) + ".args").read_text()
+    assert found and {f["rule"] for f in found} == {rule}
+    assert "9f8a3c1d" not in str(found) and "q8Zk3Jv9" not in str(found)
+
+
+def test_a_bearer_word_in_prose_is_not_a_secret(repo):
+    base = git(repo, "rev-parse", "HEAD")
+    head = commit(repo, {"d.md": "Send an Authorization: Bearer <token> header.\n"})
+    assert secretscan.scan_range(repo, base, head) == []
+
+
+@pytest.mark.skipif(not os.environ.get("LIFEBOAT_TEST_GITLEAKS"), reason="set LIFEBOAT_TEST_GITLEAKS to a gitleaks binary to run this offline check")
+def test_the_real_gitleaks_finds_a_token_json_and_never_reports_the_secret(repo, monkeypatch):
+    monkeypatch.setattr(store_install, "gitleaks_path", lambda: Path(os.environ["LIFEBOAT_TEST_GITLEAKS"]))
+    head = commit(repo, {"mcp.json": MCP})
+    found = secretscan.scan_range(repo, None, head, strict=True)
+    assert any(f["source"] == "gitleaks" and f["file"] == "mcp.json" for f in found)
+    assert "9f8a3c1d" not in str(found)
 
 
 def install(repo):

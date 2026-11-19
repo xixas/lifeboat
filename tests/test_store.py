@@ -156,6 +156,12 @@ class Token:
         return REPOS
 
 
+@pytest.fixture(autouse=True)
+def _scanner(fake_gitleaks):
+    """The pinned gitleaks is a fake that finds nothing; a test that wants another outcome reconfigures or removes it."""
+    fake_gitleaks()
+
+
 @pytest.fixture
 def source(tmp_path, monkeypatch):
     monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
@@ -193,6 +199,27 @@ def test_daily_push_blocks_on_secret_and_does_not_push(source, tmp_path):
     assert r["ok"] is False and r["pushed"] is False
     assert r["blocked_findings"][0]["file"] == "skills/SKILL.md" and AWS not in str(r)
     assert store.engine.read_json(store.engine.state_dir() / "store.json")["blocked_findings"]
+
+
+def test_daily_push_fails_closed_when_the_secret_scanner_is_unavailable(source, tmp_path, monkeypatch):
+    (source / "a.md").write_text("# fine\n")
+    monkeypatch.setattr(store.store_install, "gitleaks_path", lambda: None)
+    pushed = []
+    monkeypatch.setattr(store.github, "push", lambda *a, **kw: pushed.append(a) or {"ok": True, "error": ""})
+    r = store.run_daily(_cfg(source), gh=Token())
+    assert r["ok"] is False and r["pushed"] is False and pushed == []
+    assert r["error"].startswith("Secret scanner unavailable")
+    assert store.engine.read_json(store.engine.state_dir() / "store.json")["error"].startswith("Secret scanner unavailable")
+    assert store.git_state(source)["dirty_count"] == 1  # nothing was committed either
+
+
+def test_a_gitleaks_finding_blocks_the_daily_push_without_the_secret(source, tmp_path, monkeypatch, fake_gitleaks):
+    fake_gitleaks(dir=[{"File": "index/mcp.json", "StartLine": 3, "RuleID": "generic-api-key", "Secret": "REDACTED"}])
+    (source / "mcp.json").write_text("{}\n")
+    _git(source, "add", "mcp.json")
+    r = store.run_daily(_cfg(source), gh=Token())
+    assert r["ok"] is False and r["pushed"] is False
+    assert r["blocked_findings"] == [{"file": "mcp.json", "line": 3, "rule": "generic-api-key"}]
 
 
 def test_a_configured_store_never_pushes_without_a_lifeboat_token(source, tmp_path, monkeypatch):

@@ -451,3 +451,11 @@ def test_prepare_refuses_a_source_that_is_not_a_git_repository_and_writes_no_hoo
     assert list(cwd.iterdir()) == [] and list(plain.iterdir()) == []
     assert store.prepare(plain, binary=p)["error"] == f"{plain} is not a git repository"
     assert list(cwd.iterdir()) == []
+
+
+def test_the_revoked_sign_in_problem_title_is_in_sentence_case(source):
+    cfg = _cfg(source)
+    store.engine.write_json("store.json", {"time": store.engine.now_iso(), "ok": False, "pushed": False, "blocked_findings": [],
+                                           "error": "", "signed_out": "GitHub access was revoked", "last_ok_time": None})
+    p = next(p for p in store.engine.problems(cfg, engine_status(cfg)) if p["page"] == "store")
+    assert p["title"] == "Config store: GitHub access was revoked"

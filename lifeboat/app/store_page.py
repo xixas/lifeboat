@@ -64,8 +64,11 @@ class StoreMixin:
             row("Branch", git["branch"] or "None"),
             row("Ahead and behind", f"{git['ahead']} ahead · {git['behind']} behind"),
             row("Uncommitted changes", str(git["dirty_count"]))]))
-        btns = [self.button("Push now", self.push_store, ("pill", "suggested-action")),
-                self.button("Open skillshare", self.open_skillshare, ("pill",), False)]
+        push = self.button("Push now", self.push_store, ("pill", "suggested-action"), info["signed_in"])  # not an action button: finishing a task must not re-enable it
+        if not info["signed_in"]:
+            push.set_sensitive(False)
+            push.set_tooltip_text("Sign in to push")
+        btns = [push, self.button("Open skillshare", self.open_skillshare, ("pill",), False)]
         btns.append(self.button("Sign out", self.sign_out_store, ("pill",), False) if info["signed_in"] else
                     self.button("Sign in", self.open_store_signin, ("pill", "suggested-action"), False))
         pg.add(group(rows=[self._box(btns)]))

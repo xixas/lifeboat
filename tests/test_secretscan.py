@@ -269,13 +269,50 @@ def test_the_hook_goes_where_core_hookspath_points_repo_level(repo, tmp_path):
     assert r.returncode != 0 and "SKILL.md" in r.stderr
 
 
-def test_the_hook_goes_where_a_global_core_hookspath_points(repo, tmp_path, monkeypatch):
+def _global_hooks(tmp_path, monkeypatch):
     hooks = tmp_path / "global-hooks"
+    hooks.mkdir()
+    for name, body in (("pre-push", "echo global-pre-push-ran >&2\nexit 0"), ("commit-msg", "echo global-commit-msg-ran >&2\nexit 0")):
+        (hooks / name).write_text(f"#!/bin/sh\n{body}\n")
+        (hooks / name).chmod(0o755)
     gitconfig = tmp_path / "gitconfig"
     gitconfig.write_text(f"[core]\n\thooksPath = {hooks}\n")
     monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(gitconfig))
+    return hooks, gitconfig
+
+
+def test_a_global_core_hookspath_is_never_written_to(repo, tmp_path, monkeypatch):
+    hooks, gitconfig = _global_hooks(tmp_path, monkeypatch)
+    before = {p.name: p.read_text() for p in hooks.iterdir()}
     hook = secretscan.install_pre_push_hook(repo)
-    assert hook == hooks / "pre-push" and hook.is_file() and not (repo / ".git" / "hooks" / "pre-push").exists()
+    assert {p.name: p.read_text() for p in hooks.iterdir()} == before  # not one file added or changed there
+    assert hook == repo / ".git" / "lifeboat-hooks" / "pre-push" and secretscan.HOOK_MARK in hook.read_text()
+    assert git(repo, "config", "--local", "core.hooksPath") == str(hook.parent)
+    assert "lifeboat" not in gitconfig.read_text()
+
+
+def test_the_repo_hooks_dir_chains_to_the_global_hooks(repo, tmp_path, monkeypatch):
+    _global_hooks(tmp_path, monkeypatch)
+    _remote(repo, tmp_path)
+    secretscan.install_pre_push_hook(repo)
+    clean = subprocess.run(["git", "-C", str(repo), "push", "origin", "main"], capture_output=True, text=True, env=push_env())
+    assert clean.returncode == 0 and "global-pre-push-ran" in clean.stderr
+    (repo / "m.txt").write_text("x\n")
+    git(repo, "add", "-A")
+    r = subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", "-C", str(repo), "commit", "-qm", "m"], capture_output=True, text=True, env=push_env())
+    assert r.returncode == 0 and "global-commit-msg-ran" in r.stderr  # the other global hooks keep working
+    commit(repo, {"SKILL.md": f"token {GH}\n"})
+    blocked = subprocess.run(["git", "-C", str(repo), "push", "origin", "main"], capture_output=True, text=True, env=push_env())
+    assert blocked.returncode != 0 and "SKILL.md" in blocked.stderr
+
+
+def test_a_failing_global_pre_push_still_blocks(repo, tmp_path, monkeypatch):
+    hooks, _ = _global_hooks(tmp_path, monkeypatch)
+    (hooks / "pre-push").write_text("#!/bin/sh\nexit 9\n")
+    _remote(repo, tmp_path)
+    secretscan.install_pre_push_hook(repo)
+    r = subprocess.run(["git", "-C", str(repo), "push", "origin", "main"], capture_output=True, text=True, env=push_env())
+    assert r.returncode != 0
 
 
 def test_a_relative_hookspath_is_relative_to_the_repo(repo):

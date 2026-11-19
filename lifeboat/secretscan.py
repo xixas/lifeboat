@@ -215,10 +215,41 @@ exit 0
 """
 
 
+CHAIN_MARK = "# lifeboat-global-chain"
+
+
+def _hooks_path(repo) -> tuple[str, str]:
+    """(scope, absolute path) of core.hooksPath as git resolves it for this repo; ("", "") if unset."""
+    out = _git(repo, "config", "--type=path", "--show-scope", "--get", "core.hooksPath").strip()
+    scope, _, value = out.partition("\t")
+    if not value:
+        return "", ""
+    return scope, str(Path(value) if Path(value).is_absolute() else Path(repo) / value)
+
+
+def _own_hooks_dir(repo, global_dir: Path) -> Path:
+    """A hooks folder owned by Lifeboat inside this repo's .git, made the repo-local core.hooksPath, so a global hooksPath is never
+    written to. Every other hook there keeps running through a one-line wrapper that calls it by name."""
+    own = Path(_git(repo, "rev-parse", "--path-format=absolute", "--git-path", "lifeboat-hooks").strip())
+    own.mkdir(parents=True, exist_ok=True)
+    wrappers = {p.name for p in global_dir.iterdir() if p.is_file()} if global_dir.is_dir() else set()
+    for name in wrappers | {"pre-push"}:
+        target = own / ("pre-push.lifeboat-chained" if name == "pre-push" else name)
+        target.write_text(f'#!/bin/sh\n{CHAIN_MARK}\nif [ -x "{global_dir}/{name}" ]; then exec "{global_dir}/{name}" "$@"; fi\nexit 0\n')
+        target.chmod(0o755)
+    subprocess.run(["git", "-C", str(repo), "config", "--local", "core.hooksPath", str(own)], check=True, capture_output=True)
+    return own
+
+
 def install_pre_push_hook(repo) -> Path:
-    """Write pre-push into the hooks folder git uses (.git/hooks, or core.hooksPath if set in the repo or globally). Any hook
-    already there is kept as pre-push.lifeboat-chained and still runs."""
-    hooks = Path(_git(repo, "rev-parse", "--path-format=absolute", "--git-path", "hooks").strip())
+    """Write pre-push into the hooks folder git uses: .git/hooks, or core.hooksPath if the repo sets it. When core.hooksPath comes
+    from global or system config, a Lifeboat-owned folder in this repo takes its place (see _own_hooks_dir) and chains to the global
+    hooks. Any hook already in the folder is kept as pre-push.lifeboat-chained and still runs."""
+    scope, configured = _hooks_path(repo)
+    if scope in ("global", "system"):
+        hooks = _own_hooks_dir(repo, Path(configured))
+    else:
+        hooks = Path(_git(repo, "rev-parse", "--path-format=absolute", "--git-path", "hooks").strip())
     hook = hooks / "pre-push"
     chained = hook.with_name("pre-push.lifeboat-chained")
     hook.parent.mkdir(parents=True, exist_ok=True)

@@ -1,6 +1,6 @@
 import json
 import os
-import re
+import shutil
 import signal
 import subprocess
 import sys
@@ -12,12 +12,6 @@ import pytest
 from lifeboat import github
 
 TOKEN = "ghu_" + "t" * 36
-
-
-def helper_path(env):
-    """The token file the credential helper in a `git push` environment reads."""
-    helper = next(v for k, v in env.items() if k.startswith("GIT_CONFIG_VALUE_") and v.startswith("!f()"))
-    return re.search(r"cat (\S+?)\)", helper).group(1)
 
 
 class MemStore:
@@ -148,86 +142,179 @@ def test_installation_repos_lists_every_installation():
     assert [r["full_name"] for r in g.installation_repos()] == ["me/a", "me/b"]
 
 
-def test_push_passes_the_token_in_a_private_file_never_in_the_environment(tmp_path, monkeypatch):
+REAL_GIT = shutil.which("git")
+FAKE_GIT = """#!{python}
+import json, os, re, subprocess, sys, time
+args = sys.argv[1:]
+if "push" not in args:
+    os.execv({real!r}, ["git"] + args)
+env = os.environ
+helper = next((v for k, v in env.items() if k.startswith("GIT_CONFIG_VALUE_") and v.startswith("!f()")), "")
+path = re.search(r"cat (\\S+?)\\)", helper).group(1) if helper else ""
+rec = {{"argv": args, "env": {{k: v for k, v in env.items() if k.startswith(("GIT_", "HOME", "XDG_"))}}, "home_entries": os.listdir(env["HOME"]),
+       "helper_out": subprocess.run(["sh", "-c", helper[1:] + " get"], capture_output=True, text=True).stdout if helper else "",
+       "path": path, "mode": oct(os.stat(path).st_mode & 0o777) if path else "", "dir_mode": oct(os.stat(os.path.dirname(path)).st_mode & 0o777) if path else "",
+       "content": open(path).read() if path else ""}}
+open(env["FAKE_GIT_LOG"], "a").write(json.dumps(rec) + "\\n")
+time.sleep(float(env.get("FAKE_GIT_SLEEP", "0")))
+sys.stderr.write(env.get("FAKE_GIT_ERR", ""))
+sys.exit(int(env.get("FAKE_GIT_RC", "0")))
+"""
+
+
+class FakeGit:
+    """A `git` first on PATH that records every `push` (argv, the environment, what the credential helper says) and runs everything else for real."""
+    def __init__(self, tmp_path, monkeypatch):
+        d = tmp_path / "fakegit-bin"
+        d.mkdir()
+        (d / "git").write_text(FAKE_GIT.format(python=sys.executable, real=REAL_GIT))
+        (d / "git").chmod(0o755)
+        self.log_file = tmp_path / "pushes.jsonl"
+        monkeypatch.setenv("PATH", f"{d}{os.pathsep}{os.environ['PATH']}")
+        monkeypatch.setenv("FAKE_GIT_LOG", str(self.log_file))
+
+    @property
+    def pushes(self):
+        return [json.loads(ln) for ln in self.log_file.read_text().splitlines()] if self.log_file.exists() else []
+
+
+@pytest.fixture
+def fakegit(tmp_path, monkeypatch):
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path / "run"))
+    (tmp_path / "run").mkdir()
+    return FakeGit(tmp_path, monkeypatch)
+
+
+def mkrepo(tmp_path, origin="https://github.com/o/r.git"):
+    work = tmp_path / "work"
+    for args in (["init", "-q", "-b", "main"], ["remote", "add", "origin", origin]):
+        subprocess.run([REAL_GIT, "-C", str(work.mkdir(exist_ok=True) or work), *args], check=True)
+    (work / "f").write_text("x")
+    for args in (["add", "-A"], ["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "c"]):
+        subprocess.run([REAL_GIT, "-C", str(work), *args], check=True)
+    return work
+
+
+@pytest.mark.parametrize("origin", ["git@github.com:o/r.git", "https://bob:hunter2pw@github.com/o/r.git", "https://github.com/o/r.git", "/some/local/path.git"])
+def test_the_push_goes_to_the_https_url_with_lifeboats_token_whatever_the_user_has_configured(tmp_path, monkeypatch, fakegit, origin):
+    work = mkrepo(tmp_path, origin)
+    subprocess.run([REAL_GIT, "-C", str(work), "config", "http.extraHeader", "Authorization: Basic cmVwby1sZXZlbA=="], check=True)
+    subprocess.run([REAL_GIT, "-C", str(work), "config", "credential.helper", "store"], check=True)
+    home = tmp_path / "userhome"
+    home.mkdir()
+    (home / ".netrc").write_text("machine github.com login bob password netrc-secret\n")
+    (home / ".gitconfig").write_text('[url "ssh://evil.example/"]\n\tinsteadOf = https://github.com/\n[http]\n\textraHeader = Authorization: Basic Z2xvYmFs\n')
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(home / ".gitconfig"))
+    monkeypatch.setenv("GIT_CONFIG_COUNT", "1")
+    monkeypatch.setenv("GIT_CONFIG_KEY_0", "url.ssh://evil2.example/.insteadOf")
+    monkeypatch.setenv("GIT_CONFIG_VALUE_0", "https://github.com/")
+    assert github.push(work, TOKEN, "o/r")["ok"] is True
+    (rec,) = fakegit.pushes
+    assert rec["argv"][-3:] == ["push", "https://github.com/o/r.git", "refs/heads/main:refs/heads/main"] and "hunter2pw" not in str(rec["argv"])
+    e = rec["env"]
+    assert e["GIT_CONFIG_NOSYSTEM"] == "1" and e["GIT_CONFIG_GLOBAL"] == "/dev/null" and e["GIT_TERMINAL_PROMPT"] == "0"
+    assert e["HOME"] != str(home) and rec["home_entries"] == []  # an empty home: no ~/.netrc, no ~/.gitconfig
+    assert "evil" not in " ".join(e.values()) and e["GIT_CONFIG_COUNT"] == "3"
+    assert rec["helper_out"] == f"username=x-access-token\npassword={TOKEN}\n"
+    effective = subprocess.run([REAL_GIT, "-C", str(work), "ls-remote", "--get-url", "https://github.com/o/r.git"], env={**e, "PATH": os.environ["PATH"]}, capture_output=True, text=True).stdout.strip()
+    assert effective == "https://github.com/o/r.git"  # no insteadOf from the user's config applies
+    header = subprocess.run([REAL_GIT, "-C", str(work), "config", "--get", "http.extraHeader"], env={**e, "PATH": os.environ["PATH"]}, capture_output=True, text=True).stdout.strip()
+    assert header == ""  # the repo's and the user's extra header are reset
+    helpers = subprocess.run([REAL_GIT, "-C", str(work), "config", "--get-all", "credential.helper"], env={**e, "PATH": os.environ["PATH"]}, capture_output=True, text=True).stdout.splitlines()
+    assert [h for h in helpers if h][-1].startswith("!f()") and helpers.index("") < len(helpers) - 1  # reset first, then ours
+
+
+@pytest.mark.parametrize("key,value", [("url.ssh://git@github.com/.insteadOf", "https://github.com/"), ("url.ssh://git@github.com/.pushInsteadOf", "https://github.com/o/"),
+                                       ("http.https://github.com/.extraHeader", "Authorization: Basic eHg="), ("credential.https://github.com.helper", "store")])
+def test_a_repo_setting_that_would_reroute_or_re_authenticate_the_push_refuses_it(tmp_path, fakegit, key, value):
+    work = mkrepo(tmp_path)
+    subprocess.run([REAL_GIT, "-C", str(work), "config", key, value], check=True)
+    r = github.push(work, TOKEN, "o/r")
+    assert r["ok"] is False and key.lower() in r["error"] and fakegit.pushes == [] and TOKEN not in r["error"]
+
+
+def test_a_repo_rewrite_of_another_host_does_not_matter(tmp_path, fakegit):
+    work = mkrepo(tmp_path)
+    subprocess.run([REAL_GIT, "-C", str(work), "config", "url.ssh://git@example.com/.insteadOf", "https://example.com/"], check=True)
+    assert github.push(work, TOKEN, "o/r")["ok"] is True
+
+
+@pytest.mark.parametrize("name", ["../x", "o/r/extra", "o", "o/r; rm -rf", ""])
+def test_only_an_owner_and_name_is_pushed(tmp_path, fakegit, name):
+    r = github.push(mkrepo(tmp_path), TOKEN, name)
+    assert r["ok"] is False and fakegit.pushes == []
+
+
+def test_a_detached_head_is_not_pushed(tmp_path, fakegit):
+    work = mkrepo(tmp_path)
+    subprocess.run([REAL_GIT, "-C", str(work), "checkout", "-q", "--detach"], check=True)
+    r = github.push(work, TOKEN, "o/r")
+    assert r["ok"] is False and "branch" in r["error"] and fakegit.pushes == []
+
+
+def test_the_token_is_in_a_private_file_never_in_argv_or_the_environment(tmp_path, monkeypatch, fakegit):
+    work = mkrepo(tmp_path)
     runtime = tmp_path / "run"
-    runtime.mkdir()
-    monkeypatch.setenv("XDG_RUNTIME_DIR", str(runtime))
     seen = {}
+    orig = github._remove
 
-    def fake_run(argv, **kw):
-        path = helper_path(kw["env"])
-        seen.update(argv=argv, env=kw["env"], path=path, mode=oct(os.stat(path).st_mode & 0o777), content=open(path).read())
-        return subprocess.CompletedProcess(argv, 0, "", "")
-    monkeypatch.setattr(github.subprocess, "run", fake_run)
-    r = github.push(tmp_path, TOKEN)
-    assert r["ok"] is True
-    assert seen["argv"][:3] == ["git", "-C", str(tmp_path)] and seen["argv"][-1] == "push" and "-c" not in seen["argv"]
-    assert not any(TOKEN in a for a in seen["argv"]) and "x-access-token" in " ".join(seen["env"].values())
-    e = seen["env"]  # an empty helper first (it resets any other), then ours
-    assert e["GIT_CONFIG_COUNT"] == "2" and (e["GIT_CONFIG_KEY_0"], e["GIT_CONFIG_VALUE_0"]) == ("credential.helper", "")
-    assert e["GIT_CONFIG_KEY_1"] == "credential.helper" and "GIT_CONFIG_PARAMETERS" not in e
-    assert seen["mode"] == "0o600" and seen["content"].strip() == TOKEN and seen["path"].startswith(str(runtime))
-    assert TOKEN not in "".join(seen["env"].values()) and "LIFEBOAT_GH_TOKEN" not in seen["env"]
-    assert seen["env"]["GIT_TERMINAL_PROMPT"] == "0"
-    assert not os.path.exists(seen["path"])  # gone once the push is over
+    def spy(path, folder):
+        seen["existed"] = os.path.exists(path)
+        orig(path, folder)
+    monkeypatch.setattr(github, "_remove", spy)
+    assert github.push(work, TOKEN, "o/r")["ok"] is True
+    (rec,) = fakegit.pushes
+    assert rec["mode"] == "0o600" and rec["content"].strip() == TOKEN and rec["path"].startswith(str(runtime))
+    assert TOKEN not in str(rec["argv"]) and TOKEN not in "".join(rec["env"].values()) and "LIFEBOAT_GH_TOKEN" not in rec["env"]
+    assert not os.path.exists(rec["path"])  # gone once the push is over
 
 
-def test_the_token_file_is_removed_when_the_push_fails_or_crashes(tmp_path, monkeypatch):
-    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
-    paths = []
-
-    def failing(argv, **kw):
-        paths.append(helper_path(kw["env"]))
-        return subprocess.CompletedProcess(argv, 1, "", "denied")
-    monkeypatch.setattr(github.subprocess, "run", failing)
-    assert github.push(tmp_path, TOKEN)["ok"] is False
-    assert not os.path.exists(paths[-1])
-
-    def crashing(argv, **kw):
-        paths.append(helper_path(kw["env"]))
-        raise subprocess.TimeoutExpired(argv, 1)
-    monkeypatch.setattr(github.subprocess, "run", crashing)
-    assert github.push(tmp_path, TOKEN)["ok"] is False
-    assert not os.path.exists(paths[-1])
+def test_the_token_file_is_removed_when_the_push_fails_or_crashes(tmp_path, monkeypatch, fakegit):
+    work = mkrepo(tmp_path)
+    monkeypatch.setenv("FAKE_GIT_RC", "1")
+    monkeypatch.setenv("FAKE_GIT_ERR", "denied")
+    assert github.push(work, TOKEN, "o/r")["ok"] is False
+    assert not os.path.exists(fakegit.pushes[-1]["path"])
+    monkeypatch.setenv("FAKE_GIT_SLEEP", "30")
+    assert github.push(work, TOKEN, "o/r", timeout=1)["ok"] is False  # TimeoutExpired
+    assert not os.path.exists(fakegit.pushes[-1]["path"])
 
 
-def test_without_a_runtime_dir_the_file_lives_in_a_private_temp_dir(tmp_path, monkeypatch):
+def test_without_a_runtime_dir_the_file_lives_in_a_private_temp_dir(tmp_path, monkeypatch, fakegit):
+    work = mkrepo(tmp_path)
     monkeypatch.delenv("XDG_RUNTIME_DIR", raising=False)
-    monkeypatch.setenv("TMPDIR", str(tmp_path))
-    modes = []
-
-    def fake_run(argv, **kw):
-        path = helper_path(kw["env"])
-        modes.append((oct(os.stat(path).st_mode & 0o777), oct(os.stat(os.path.dirname(path)).st_mode & 0o777)))
-        return subprocess.CompletedProcess(argv, 0, "", "")
-    monkeypatch.setattr(github.subprocess, "run", fake_run)
-    github.push(tmp_path, TOKEN)
-    assert modes == [("0o600", "0o700")] and list(tmp_path.iterdir()) == []
+    tmp = tmp_path / "tmp"
+    tmp.mkdir()
+    monkeypatch.setenv("TMPDIR", str(tmp))
+    github.push(work, TOKEN, "o/r")
+    (rec,) = fakegit.pushes
+    assert (rec["mode"], rec["dir_mode"]) == ("0o600", "0o700") and list(tmp.iterdir()) == []
 
 
 def test_a_pre_push_hook_does_not_see_the_token(tmp_path, monkeypatch):
     """The real thing: git runs a hook during the push, and the hook's environment must not hold the token."""
     monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
-    bare = tmp_path / "r.git"
-    work = tmp_path / "w"
-    for cmd in (["git", "init", "-q", "--bare", "-b", "main", str(bare)], ["git", "init", "-q", "-b", "main", str(work)]):
-        subprocess.run(cmd, check=True)
-    (work / "f").write_text("x")
-    for args in (["add", "-A"], ["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "c"], ["remote", "add", "origin", str(bare)]):
-        subprocess.run(["git", "-C", str(work), *args], check=True)
+    bare = tmp_path / "hub" / "o" / "r.git"
+    bare.parent.mkdir(parents=True)
+    subprocess.run(["git", "init", "-q", "--bare", "-b", "main", str(bare)], check=True)
+    monkeypatch.setattr(github, "GIT_HOST", f"file://{tmp_path / 'hub'}")  # the test's stand-in for github.com
+    work = mkrepo(tmp_path)
     dump = tmp_path / "hook-env.txt"
     hook = work / ".git" / "hooks" / "pre-push"
     hook.write_text(f"#!/bin/sh\nenv > {dump}\nprintf '%s\\n' \"$@\" >> {dump}\nps -o args= -p $PPID >> {dump}\nexit 0\n")
     hook.chmod(0o755)
-    assert github.push(work, TOKEN, set_upstream="main")["ok"] is True
+    assert github.push(work, TOKEN, "o/r")["ok"] is True
     assert dump.exists() and TOKEN not in dump.read_text() and "LIFEBOAT_GH_TOKEN" not in dump.read_text()
+    assert subprocess.run(["git", "-C", str(bare), "rev-parse", "main"], capture_output=True, text=True).returncode == 0
     assert not [p for p in tmp_path.iterdir() if p.name.startswith("lifeboat")]
 
 
-def test_push_failure_reports_error_without_token(tmp_path, monkeypatch):
-    monkeypatch.setattr(github.subprocess, "run", lambda argv, **kw: subprocess.CompletedProcess(argv, 1, "", f"denied for {TOKEN}"))
-    r = github.push(tmp_path, TOKEN)
-    assert r["ok"] is False and TOKEN not in r["error"]
+def test_push_failure_reports_error_without_token(tmp_path, monkeypatch, fakegit):
+    monkeypatch.setenv("FAKE_GIT_RC", "1")
+    monkeypatch.setenv("FAKE_GIT_ERR", f"denied for {TOKEN}")
+    r = github.push(mkrepo(tmp_path), TOKEN, "o/r")
+    assert r["ok"] is False and TOKEN not in r["error"] and "denied" in r["error"]
 
 
 def test_keyring_store_uses_secret_tool_with_stdin(monkeypatch):
@@ -290,12 +377,13 @@ def test_the_token_file_is_removed_when_the_process_gets_sigterm_or_sighup_mid_p
     fakebin = tmp_path / "bin"
     fakebin.mkdir()
     started, gitpid = tmp_path / "started", tmp_path / "gitpid"
-    (fakebin / "git").write_text(f"#!/bin/sh\necho $$ > {gitpid}\ntouch {started}\nexec sleep 60\n")
+    (fakebin / "git").write_text(f'#!/bin/sh\ncase " $* " in *" push "*) ;; *) exec {REAL_GIT} "$@";; esac\necho $$ > {gitpid}\ntouch {started}\nexec sleep 60\n')
     (fakebin / "git").chmod(0o755)
-    code = "import sys; from lifeboat import github; github.push(sys.argv[1], 'tok-secret-123', timeout=120)"
+    work = mkrepo(tmp_path)
+    code = "import sys; from lifeboat import github; github.push(sys.argv[1], 'tok-secret-123', 'o/r', timeout=120)"
     env = dict(os.environ, XDG_RUNTIME_DIR=str(runtime), PATH=f"{fakebin}{os.pathsep}{os.environ['PATH']}",
                PYTHONPATH=str(Path(github.__file__).parent.parent))
-    child = subprocess.Popen([sys.executable, "-c", code, str(tmp_path)], env=env)
+    child = subprocess.Popen([sys.executable, "-c", code, str(work)], env=env)
     try:
         deadline = time.time() + 15
         while not started.exists() and time.time() < deadline:
@@ -310,9 +398,7 @@ def test_the_token_file_is_removed_when_the_process_gets_sigterm_or_sighup_mid_p
             os.kill(int(gitpid.read_text()), signal.SIGKILL)  # the fake git this test started
 
 
-def test_the_signal_handlers_are_restored_after_a_push(tmp_path, monkeypatch):
-    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
+def test_the_signal_handlers_are_restored_after_a_push(tmp_path, monkeypatch, fakegit):
     before = (signal.getsignal(signal.SIGTERM), signal.getsignal(signal.SIGHUP))
-    monkeypatch.setattr(github.subprocess, "run", lambda argv, **kw: subprocess.CompletedProcess(argv, 0, "", ""))
-    github.push(tmp_path, TOKEN)
+    github.push(mkrepo(tmp_path), TOKEN, "o/r")
     assert (signal.getsignal(signal.SIGTERM), signal.getsignal(signal.SIGHUP)) == before

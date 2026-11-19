@@ -7,6 +7,7 @@ from __future__ import annotations
 import contextlib
 import json
 import os
+import re
 import shlex
 import shutil
 import signal
@@ -209,16 +210,59 @@ def _token_file(token: str):
         _remove(path, folder)
 
 
-def push(repo_path, token: str, timeout: int = 120, set_upstream: str | None = None) -> dict:
-    """`git push` with the token supplied to this one process through a private file: never argv, never the environment, never git config."""
+GIT_HOST = "https://github.com"  # the only place Lifeboat pushes to; tests point it at a local folder
+FULL_NAME = re.compile(r"^(?!\.+/)[\w.-]+/(?!\.+$)[\w.-]+$")
+_SCOPED = re.compile(r"^(?:url\.(?P<rewrite>.+)\.(?:push)?insteadof|http\.(?P<header>.+)\.extraheader|credential\.(?P<helper>.+)\.helper)$")
+
+
+def push_url(full_name: str) -> str:
+    if not FULL_NAME.match(full_name):
+        raise GitHubError(f"{full_name!r} is not an owner/name GitHub repository")
+    return f"{GIT_HOST}/{full_name}.git"
+
+
+def _clean_env(home: str) -> dict:
+    """git's environment for Lifeboat's own commands: no GIT_* variable of the user's, no system or global config, an empty HOME
+    (so no ~/.netrc, insteadOf, extraHeader or credential helper applies) and no terminal prompt."""
+    env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+    return {**env, "HOME": home, "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_TERMINAL_PROMPT": "0"}
+
+
+def _git(repo, env: dict, *args: str) -> subprocess.CompletedProcess:
+    return subprocess.run(["git", "-C", str(repo), *args], env=env, capture_output=True, text=True, timeout=20, check=False)
+
+
+def _rewrite_problem(repo, env: dict, url: str) -> str:
+    """Why the repo's own config would send this URL somewhere else or add a login to it, or "" if nothing does. The empty
+    http.extraHeader and credential.helper Lifeboat adds reset the plain keys; keys scoped to a URL cannot be reset, so they refuse."""
+    for line in _git(repo, env, "config", "--get-regexp", r"^(url\..*\.(push)?insteadof|http\..*\.extraheader|credential\..*\.helper)$").stdout.splitlines():
+        key, _, value = line.partition(" ")
+        m = _SCOPED.match(key)
+        scope = next((g for g in m.groups() if g), "") if m else ""
+        if (m.group("rewrite") and value and url.startswith(value)) or (not m.group("rewrite") and scope and url.startswith(scope.rstrip("/"))):
+            return f"the repo's git config ({key}) would change where Lifeboat pushes or how it signs in; remove it"
+    return ""
+
+
+def push(repo_path, token: str, full_name: str, timeout: int = 120) -> dict:
+    """Push the current branch to https://github.com/<full_name>.git and nowhere else, with the token supplied to this one process through
+    a private file: never argv, never the environment, never git config. `origin`, ssh, ~/.netrc and the user's git config play no part."""
     try:
-        with _token_file(token) as path:
-            n = int(os.environ.get("GIT_CONFIG_COUNT") or 0)  # config through the environment, not `-c`: git hands that to hooks
-            env = {**os.environ, "GIT_TERMINAL_PROMPT": "0", "GIT_CONFIG_COUNT": str(n + 2),
-                   f"GIT_CONFIG_KEY_{n}": "credential.helper", f"GIT_CONFIG_VALUE_{n}": "",  # empty: forget any other helper
-                   f"GIT_CONFIG_KEY_{n + 1}": "credential.helper", f"GIT_CONFIG_VALUE_{n + 1}": HELPER.format(path=shlex.quote(path))}
-            argv = ["git", "-C", str(repo_path), "push", *(["-u", "origin", set_upstream] if set_upstream else [])]
-            r = subprocess.run(argv, env=env, capture_output=True, text=True, timeout=timeout, check=False)
-    except (OSError, subprocess.TimeoutExpired) as e:
+        url = push_url(full_name)
+        with tempfile.TemporaryDirectory(prefix="lifeboat-home-") as home:
+            env = _clean_env(home)
+            head = _git(repo_path, env, "symbolic-ref", "-q", "--short", "HEAD")
+            branch = head.stdout.strip()
+            if head.returncode != 0 or not branch:
+                return {"ok": False, "error": "the store is not on a branch (detached HEAD)"}
+            if problem := _rewrite_problem(repo_path, env, url):
+                return {"ok": False, "error": problem}
+            with _token_file(token) as path:
+                env.update(GIT_CONFIG_COUNT="3", GIT_CONFIG_KEY_0="credential.helper", GIT_CONFIG_VALUE_0="",  # empty: forget any other helper
+                           GIT_CONFIG_KEY_1="http.extraHeader", GIT_CONFIG_VALUE_1="",
+                           GIT_CONFIG_KEY_2="credential.helper", GIT_CONFIG_VALUE_2=HELPER.format(path=shlex.quote(path)))
+                refspec = f"refs/heads/{branch}:refs/heads/{branch}"
+                r = subprocess.run(["git", "-C", str(repo_path), "push", url, refspec], env=env, capture_output=True, text=True, timeout=timeout, check=False)
+    except (OSError, subprocess.TimeoutExpired, GitHubError) as e:
         return {"ok": False, "error": str(e).replace(token, "***")}
     return {"ok": r.returncode == 0, "error": "" if r.returncode == 0 else (r.stderr or r.stdout).replace(token, "***").strip()[-500:]}

@@ -145,17 +145,22 @@ class NoToken:
         return None
 
 
+REPOS = [{"full_name": "me/store", "clone_url": "https://github.com/me/store.git", "private": True}]
+
+
 class Token:
     def token(self):
         return "ghu_" + "z" * 36
+
+    def installation_repos(self):
+        return REPOS
 
 
 @pytest.fixture
 def source(tmp_path, monkeypatch):
     monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
     monkeypatch.setenv("PYTHONPATH", str(PKG.parent))
-    bare = tmp_path / "remote.git"
-    _git(tmp_path, "init", "-q", "--bare", "-b", "main", str(bare))
+    bare = _hub(tmp_path, monkeypatch)
     src = tmp_path / "src"
     _git(tmp_path, "clone", "-q", str(bare), str(src))
     (src / "README.md").write_text("x\n")
@@ -163,7 +168,17 @@ def source(tmp_path, monkeypatch):
     _git(src, "commit", "-qm", "init")
     _git(src, "push", "-q", "-u", "origin", "HEAD:main")
     _git(src, "branch", "-u", "origin/main")
+    _git(src, "remote", "set-url", "origin", "https://github.com/me/store.git")  # what GitHub knows it as; the push really goes to `bare`
     return src
+
+
+def _hub(tmp_path, monkeypatch):
+    """A local folder standing in for github.com: https://github.com/me/store.git is pushed to <tmp>/hub/me/store.git."""
+    bare = tmp_path / "hub" / "me" / "store.git"
+    bare.parent.mkdir(parents=True)
+    _git(tmp_path, "init", "-q", "--bare", "-b", "main", str(bare))
+    monkeypatch.setattr(store.github, "GIT_HOST", f"file://{tmp_path / 'hub'}")
+    return bare
 
 
 def _cfg(src, push=True):
@@ -196,10 +211,10 @@ def test_a_configured_store_never_pushes_without_a_lifeboat_token(source, tmp_pa
 def test_daily_push_with_lifeboat_token_uses_git_push(source, tmp_path, monkeypatch):
     (source / "a.md").write_text("# fine\n")
     pushed = []
-    monkeypatch.setattr(store.github, "push", lambda path, token, **kw: pushed.append((str(path), token)) or {"ok": True, "error": ""})
+    monkeypatch.setattr(store.github, "push", lambda path, token, full_name, **kw: pushed.append((str(path), token, full_name)) or {"ok": True, "error": ""})
     r = store.run_daily(_cfg(source), gh=Token())
     assert r["ok"] and r["pushed"]
-    assert pushed == [(str(source), "ghu_" + "z" * 36)]
+    assert pushed == [(str(source), "ghu_" + "z" * 36, "me/store")]
     assert store.git_state(source)["dirty_count"] == 0  # committed first
 
 
@@ -385,15 +400,14 @@ def test_a_different_pick_than_the_existing_skillshare_source_is_refused(tmp_pat
 def test_a_new_store_with_no_upstream_is_pushed_with_dash_u_on_the_first_run(tmp_path, monkeypatch):
     """A fresh repo and a remote with no refs: ahead is 0 because there is no upstream, but nothing is on GitHub yet."""
     monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
-    bare = tmp_path / "remote.git"
-    _git(tmp_path, "init", "-q", "--bare", "-b", "main", str(bare))
+    bare = _hub(tmp_path, monkeypatch)
     src = tmp_path / "src"
     src.mkdir()
     _git(src, "init", "-q", "-b", "main")
     (src / "skills.md").write_text("# s\n")
     _git(src, "add", "-A")
     _git(src, "commit", "-qm", "first")
-    _git(src, "remote", "add", "origin", str(bare))
+    _git(src, "remote", "add", "origin", "https://github.com/me/store.git")
     assert store.git_state(src)["ahead"] == 0
     r = store.run_daily(_cfg(src), gh=Token())
     assert r["ok"] and r["pushed"], r
@@ -407,6 +421,9 @@ def test_a_new_store_with_no_upstream_is_pushed_with_dash_u_on_the_first_run(tmp
 class RevokedGH:
     def __init__(self):
         self.signed_out = False
+
+    def installation_repos(self):
+        return REPOS
 
     def token(self):
         return None if self.signed_out else "ghu_" + "z" * 36
@@ -459,3 +476,28 @@ def test_the_revoked_sign_in_problem_title_is_in_sentence_case(source):
                                            "error": "", "signed_out": "GitHub access was revoked", "last_ok_time": None})
     p = next(p for p in store.engine.problems(cfg, engine_status(cfg)) if p["page"] == "store")
     assert p["title"] == "Config store: GitHub access was revoked"
+
+
+# ---------------------------------------------------------------- the push is hermetic
+@pytest.mark.parametrize("origin", ["https://github.com/me/other.git", "git@github.com:me/other.git", "/some/local/path.git", "https://gitlab.com/me/store.git", ""])
+def test_a_store_whose_remote_is_not_the_confirmed_github_repo_is_refused(source, monkeypatch, origin):
+    if origin:
+        _git(source, "remote", "set-url", "origin", origin)
+    else:
+        _git(source, "remote", "remove", "origin")
+    (source / "a.md").write_text("# new\n")
+    calls = []
+    monkeypatch.setattr(store.github, "push", lambda *a, **kw: calls.append(a) or {"ok": True, "error": ""})
+    r = store.run_daily(_cfg(source), gh=Token())
+    assert r["ok"] is False and r["pushed"] is False and r["error"] and calls == []
+    assert store.git_state(source)["dirty_count"] == 1  # nothing was committed either
+
+
+def test_an_ssh_origin_of_the_confirmed_repo_still_pushes_to_the_https_url(source, tmp_path):
+    _git(source, "remote", "set-url", "origin", "git@github.com:me/store.git")
+    (source / "a.md").write_text("# new\n")
+    r = store.run_daily(_cfg(source), gh=Token())
+    assert r["ok"] and r["pushed"], r
+    assert _git(tmp_path / "hub" / "me" / "store.git", "log", "-1", "--format=%s", "main").strip() == "Update skills"
+    assert store.git_state(source)["ahead"] == 0  # the tracking ref follows the push, so the next run has nothing to do
+    assert store.run_daily(_cfg(source), gh=Token())["pushed"] is False

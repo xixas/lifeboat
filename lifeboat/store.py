@@ -115,16 +115,37 @@ def _record(result: dict) -> dict:
 AUTH_FAILED = re.compile(r"\b40[13]\b|Authentication failed|Invalid username or password", re.I)
 
 
-def _push(repo: Path, gh, first_branch: str | None = None) -> dict:
-    """Push with Lifeboat's own GitHub token, and only with it: never `skillshare push`, never another login on this machine."""
+def _confirmed_repo(repo: Path, gh) -> tuple[str | None, str]:
+    """("owner/name", "") for the GitHub repo the store's `origin` names, once the app confirms it can reach it; else (None, why).
+    The remote is read raw from the repo's config: it only says which repo, never where Lifeboat pushes to."""
+    url = (_git(repo, "config", "--get", "remote.origin.url") or "").strip()
+    if not github_repo(url):
+        return None, "the store's origin is not a github.com repository" if url else "the store has no origin on GitHub"
+    try:
+        found = find_repo(gh, url)
+    except github.GitHubError as e:
+        return None, str(e)
+    return (found["full_name"], "") if found else (None, f"the Lifeboat GitHub App is not installed on {github_repo(url)}")
+
+
+def _push(repo: Path, gh) -> dict:
+    """Push with Lifeboat's own GitHub token, and only with it: never `skillshare push`, never another login on this machine, never
+    `origin` itself: github.push goes to the https URL of the repo the app confirmed."""
     token = gh.token()
     if not token:
         return {"ok": False, "error": "", "signed_out": "Signed out: sign in to push"}
+    name, why = _confirmed_repo(repo, gh)
+    if not name:
+        return {"ok": False, "error": why}
     if git_state(repo)["dirty_count"]:
         for args in (["add", "-A"], ["-c", "user.name=Lifeboat", "-c", "user.email=lifeboat@localhost", "commit", "-qm", "Update skills"]):
             if _git(repo, *args) is None:
                 return {"ok": False, "error": "could not commit the changes"}
-    out = github.push(repo, token, set_upstream=first_branch)
+    branch, sha = git_state(repo)["branch"], (_git(repo, "rev-parse", "HEAD") or "").strip()
+    out = github.push(repo, token, name)
+    if out["ok"] and branch and sha:  # a push to a URL moves no tracking ref: do it, so ahead/behind and the next scan are right
+        for args in (["update-ref", f"refs/remotes/origin/{branch}", sha], ["branch", "--set-upstream-to", f"origin/{branch}", branch]):
+            _git(repo, *args)
     if not out["ok"] and AUTH_FAILED.search(out["error"]):
         gh.sign_out()  # the token no longer works: say so instead of failing the same way every day
         return {**out, "signed_out": "GitHub access was revoked"}
@@ -161,11 +182,11 @@ def run_daily(cfg: Config, gh=None) -> dict | None:
         out = _git(repo, "rev-parse", "--abbrev-ref", "@{u}")
         result["repo"], result["upstream"] = str(repo), (out or "").strip() or None
         return _record(result)
-    first = before["branch"] if before["remote_url"] and before["last_commit_time"] and not _upstream(repo) else None  # never pushed yet
-    if not before["dirty_count"] and not before["ahead"] and not first:
+    never_pushed = before["remote_url"] and before["last_commit_time"] and not _upstream(repo)
+    if not before["dirty_count"] and not before["ahead"] and not never_pushed:
         result["ok"] = True
         return _record(result)
-    out = _push(repo, gh or github.GitHub(), first)
+    out = _push(repo, gh or github.GitHub())
     result.update(ok=out["ok"], pushed=out["ok"], error=out["error"], signed_out=out.get("signed_out", ""))
     return _record(result)
 

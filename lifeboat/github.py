@@ -90,7 +90,8 @@ class GitHub:
     def _save(self, d: dict) -> None:
         t = self.now()
         self.store.set(json.dumps({"access_token": d["access_token"], "refresh_token": d.get("refresh_token", ""),
-                                   "expires_at": t + int(d.get("expires_in", 28800)),
+                                   # the app has token expiry disabled: no expires_in means the token never expires
+                                   "expires_at": t + int(d["expires_in"]) if d.get("expires_in") else None,
                                    "refresh_expires_at": t + int(d.get("refresh_token_expires_in", 0))}))
 
     def poll_token(self, device_code: str) -> dict:
@@ -131,8 +132,9 @@ class GitHub:
         saved = self._saved()
         if not saved:
             return None
-        if saved["expires_at"] - self.now() < REFRESH_MARGIN:
-            if not self.refresh():
+        expires_at = saved.get("expires_at")
+        if expires_at is not None and expires_at - self.now() < REFRESH_MARGIN:
+            if not self.refresh():  # no refresh token or a failed refresh: the caller signs in again
                 return None
             saved = self._saved()
         return saved["access_token"]

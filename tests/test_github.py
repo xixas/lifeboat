@@ -185,3 +185,28 @@ def test_keyring_store_without_secret_tool(monkeypatch):
     assert s.get() is None
     with pytest.raises(github.GitHubError, match="secret-tool"):
         s.set("x")
+
+
+def test_a_token_without_expiry_is_kept_as_never_expiring_and_never_refreshed():
+    g, store = gh({}, now=1000)
+    g.http.routes[TOK] = (200, {"access_token": TOKEN, "token_type": "bearer"})
+    assert g.poll_token("dc") == {"status": "ok"}
+    saved = json.loads(store.get())
+    assert saved["expires_at"] is None and saved["refresh_token"] == ""
+    g.now = lambda: 10**12  # far in the future
+    assert g.token() == TOKEN
+    assert g.http.calls[-1]["data"]["grant_type"] != "refresh_token"
+    assert [c for c in g.http.calls if c["data"].get("grant_type") == "refresh_token"] == []
+    assert g.signed_in()
+
+
+def test_an_old_saved_token_without_expires_at_is_not_refreshed():
+    g, store = gh({}, now=10**9)
+    store.set(json.dumps({"access_token": TOKEN, "refresh_token": ""}))
+    assert g.token() == TOKEN and g.http.calls == []
+
+
+def test_an_expiring_token_with_no_refresh_token_means_sign_in_again():
+    g, store = gh({}, now=1000)
+    store.set(json.dumps({"access_token": TOKEN, "refresh_token": "", "expires_at": 1000}))
+    assert g.token() is None and g.http.calls == []

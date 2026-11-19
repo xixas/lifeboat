@@ -13,9 +13,13 @@ AWS = "AKIA" + "IOSFODNN7EXAMPLE"
 GH = "ghp_" + "a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6q7R8"
 
 
+_REAL_CMD = getattr(secretscan, "_lifeboat_cmd", None)
+
+
 @pytest.fixture(autouse=True)
 def no_gitleaks(monkeypatch):
     monkeypatch.setattr(secretscan.shutil, "which", lambda name: None)
+    monkeypatch.setattr(secretscan, "_lifeboat_cmd", lambda: ["/nonexistent/bin/lifeboat"])  # no `lifeboat` of this machine's is found by absolute path
 
 
 def git(cwd, *a, **kw):
@@ -211,7 +215,7 @@ def _remote(repo, tmp_path):
 
 def test_the_hook_does_not_pin_a_python_path_to_a_checkout(repo):
     text = install(repo).read_text()
-    assert "PYTHONPATH" not in text and "python3 -m" not in text and "lifeboat secret-scan --pre-push" in text
+    assert "PYTHONPATH" not in text and "secret-scan --pre-push" in text
 
 
 def test_the_hook_fails_open_with_a_warning_when_lifeboat_is_not_installed(repo, tmp_path):
@@ -451,3 +455,48 @@ def test_commits_already_on_a_remote_are_not_scanned_again(repo):
     git(repo, "update-ref", "refs/remotes/origin/main", "HEAD")
     head = commit(repo, {"b.md": "fine\n"})
     assert secretscan.scan_pre_push(repo, f"refs/heads/main {head} refs/heads/main {'0' * 40}\n") == []
+
+
+# ---------------------------------------------------------------- the hook finds lifeboat without PATH
+def _abs_shim(tmp_path, name="abs-bin"):
+    d = tmp_path / name
+    d.mkdir()
+    exe = d / "lifeboat"
+    exe.write_text(f'#!/bin/sh\nPATH="{_BIN}" PYTHONPATH="{Path(secretscan.__file__).parent.parent}" exec {sys.executable} -m lifeboat "$@"\n')
+    exe.chmod(0o755)
+    return exe
+
+
+def _push_line(head):
+    return f"refs/heads/main {head} refs/heads/main {'0' * 40}\n"
+
+
+def test_the_hook_blocks_a_secret_with_an_empty_path_by_the_absolute_path_written_at_install(repo, tmp_path, monkeypatch):
+    exe = _abs_shim(tmp_path)
+    monkeypatch.setattr(secretscan.shutil, "which", lambda name: str(exe) if name == "lifeboat" else None)
+    monkeypatch.setattr(secretscan, "_lifeboat_cmd", _REAL_CMD)
+    hook = install(repo)
+    assert str(exe) in hook.read_text()
+    head = commit(repo, {"SKILL.md": f"key {AWS}\n"})
+    r = subprocess.run([str(hook), "origin", "x"], input=_push_line(head), capture_output=True, text=True, cwd=repo, env={"PATH": ""})
+    assert r.returncode == 1 and "SKILL.md" in r.stderr, r.stderr
+
+
+def test_the_hook_falls_back_to_path_when_the_absolute_path_is_gone(repo, tmp_path, monkeypatch):
+    exe = _abs_shim(tmp_path)
+    monkeypatch.setattr(secretscan.shutil, "which", lambda name: str(exe) if name == "lifeboat" else None)
+    monkeypatch.setattr(secretscan, "_lifeboat_cmd", _REAL_CMD)
+    hook = install(repo)
+    exe.unlink()
+    head = commit(repo, {"SKILL.md": f"key {AWS}\n"})
+    r = subprocess.run([str(hook), "origin", "x"], input=_push_line(head), capture_output=True, text=True, cwd=repo, env=push_env())
+    assert r.returncode == 1 and "SKILL.md" in r.stderr, r.stderr
+    r = subprocess.run([str(hook), "origin", "x"], input=_push_line(head), capture_output=True, text=True, cwd=repo, env=push_env(on_path=False))
+    assert r.returncode == 0 and "not found" in r.stderr  # neither exists: fail open, with a warning
+
+
+def test_without_a_lifeboat_executable_the_hook_runs_this_python_with_dash_m(repo, monkeypatch):
+    monkeypatch.setattr(secretscan.shutil, "which", lambda name: None)
+    assert _REAL_CMD() == [sys.executable, "-m", "lifeboat"]
+    monkeypatch.setattr(secretscan, "_lifeboat_cmd", _REAL_CMD)
+    assert f"{sys.executable} -m lifeboat" in install(repo).read_text()

@@ -6,6 +6,7 @@ import fnmatch
 import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -187,25 +188,47 @@ def scan_pre_push(repo, stdin_text: str) -> list[dict]:
 
 
 PROBE_MARKER = "lifeboat-secret-scan-1"
+# Shell builtins only before lifeboat runs (no cat, dirname): the hook has to work even with an empty PATH.
 HOOK = f"""#!/bin/sh
 {HOOK_MARK}: blocks a push that carries a secret. Edits here are overwritten.
-input=$(cat)
-if command -v lifeboat >/dev/null 2>&1 && [ "$(lifeboat secret-scan --probe 2>/dev/null)" = "{PROBE_MARKER}" ]; then
-  printf '%s\\n' "$input" | lifeboat secret-scan --pre-push "$@"
+input=""
+while IFS= read -r line || [ -n "$line" ]; do
+  input="$input$line
+"
+done
+lb() {{
+  if [ -x @EXE@ ]; then @EXE@ @ARGS@"$@"
+  elif command -v lifeboat >/dev/null 2>&1; then lifeboat "$@"
+  else return 127
+  fi
+}}
+if [ "$(lb secret-scan --probe 2>/dev/null)" = "{PROBE_MARKER}" ]; then
+  printf '%s' "$input" | lb secret-scan --pre-push "$@"
   rc=$?
   if [ "$rc" -ne 0 ]; then
     echo "lifeboat: push blocked (the secret check exited $rc)" >&2
     exit 1
   fi
 else
-  echo "lifeboat: not found on PATH, or too old to have the secret check; skipped it for this push" >&2
+  echo "lifeboat: not found, or too old to have the secret check; skipped it for this push" >&2
 fi
-chained="$(dirname "$0")/pre-push.lifeboat-chained"
+chained="${{0%/*}}/pre-push.lifeboat-chained"
 if [ -x "$chained" ]; then
-  printf '%s\\n' "$input" | "$chained" "$@" || exit $?
+  printf '%s' "$input" | "$chained" "$@" || exit $?
 fi
 exit 0
 """
+
+
+def _lifeboat_cmd() -> list[str]:
+    """How the hook runs Lifeboat, fixed at install time: the absolute path of this machine's `lifeboat`, else this Python with -m."""
+    exe = shutil.which("lifeboat")
+    return [os.path.abspath(exe)] if exe else [sys.executable, "-m", "lifeboat"]
+
+
+def hook_text() -> str:
+    exe, *rest = _lifeboat_cmd()
+    return HOOK.replace("@EXE@", shlex.quote(exe)).replace("@ARGS@", "".join(shlex.quote(a) + " " for a in rest))
 
 
 CHAIN_MARK = "# lifeboat-global-chain"
@@ -252,7 +275,7 @@ def install_pre_push_hook(repo) -> Path:
         if chained.exists():
             raise RuntimeError(f"{chained} already exists; not overwriting a hook")
         hook.rename(chained)
-    hook.write_text(HOOK)
+    hook.write_text(hook_text())
     hook.chmod(0o755)
     return hook
 

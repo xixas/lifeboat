@@ -64,3 +64,34 @@ def init_adopt(repo: Path | str, binary: Path | str | None = None, home: Path | 
 
 def init_new(binary: Path | str | None = None, home: Path | str | None = None) -> dict:
     return _init(["--no-copy", "--git", "--no-skill", "--all-targets", "--no-tui"], binary, home)
+
+
+def _git(path: Path | str, *args: str) -> str | None:
+    try:
+        r = subprocess.run(["git", "-C", str(path), *args], capture_output=True, text=True, timeout=20, check=False,
+                           env=dict(os.environ, GIT_TERMINAL_PROMPT="0"))
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    return r.stdout if r.returncode == 0 else None
+
+
+def git_state(path: Path | str) -> dict:
+    """{is_repo, branch, remote_url, dirty_count, ahead, behind, last_commit_time}, read straight from git."""
+    state = {"is_repo": False, "branch": None, "remote_url": None, "dirty_count": 0, "ahead": 0, "behind": 0, "last_commit_time": None}
+    if not Path(path).is_dir() or (out := _git(path, "status", "--porcelain=v2", "--branch")) is None:
+        return state
+    state["is_repo"] = True
+    for line in out.splitlines():
+        if line.startswith("# branch.head "):
+            head = line.split(" ", 2)[2]
+            state["branch"] = None if head == "(detached)" else head
+        elif line.startswith("# branch.ab "):
+            plus, minus = line.split()[2:4]
+            state["ahead"], state["behind"] = int(plus[1:]), int(minus[1:])
+        elif not line.startswith("#"):
+            state["dirty_count"] += 1
+    if (url := _git(path, "remote", "get-url", "origin")) and url.strip():
+        state["remote_url"] = url.strip()
+    if (when := _git(path, "log", "-1", "--format=%cI")) and when.strip():
+        state["last_commit_time"] = when.strip()
+    return state

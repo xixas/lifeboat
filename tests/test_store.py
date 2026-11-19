@@ -87,3 +87,50 @@ def test_init_without_binary(monkeypatch):
 def test_skillshare_sync_is_never_called():
     for f in (PKG / "store.py", PKG / "store_install.py"):  # engine.py's "sync" is rclone's
         assert not re.search(r"""["']sync["']""", f.read_text()), f"{f} passes sync to skillshare"
+
+
+# ---------------------------------------------------------------- git state
+def _git(cwd, *a):
+    return subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", "-C", str(cwd), *a], check=True, capture_output=True, text=True).stdout
+
+
+def test_git_state_not_a_repo(tmp_path):
+    assert store.git_state(tmp_path)["is_repo"] is False
+    assert store.git_state(tmp_path / "nope")["is_repo"] is False
+
+
+def test_git_state_fresh_repo_without_commits(tmp_path):
+    _git(tmp_path, "init", "-q", "-b", "main")
+    s = store.git_state(tmp_path)
+    assert s["is_repo"] and s["branch"] == "main" and s["remote_url"] is None and s["last_commit_time"] is None
+    assert (s["ahead"], s["behind"], s["dirty_count"]) == (0, 0, 0)
+
+
+def test_git_state_tracks_remote_dirty_ahead_behind(tmp_path):
+    bare = tmp_path / "remote.git"
+    _git(tmp_path, "init", "-q", "--bare", "-b", "main", str(bare))
+    a = tmp_path / "a"
+    _git(tmp_path, "clone", "-q", str(bare), str(a))
+    (a / "f").write_text("1")
+    _git(a, "add", "f")
+    _git(a, "commit", "-qm", "one")
+    _git(a, "push", "-q", "-u", "origin", "HEAD:main")
+    _git(a, "branch", "-u", "origin/main")
+    s = store.git_state(a)
+    assert (s["branch"], s["ahead"], s["behind"], s["dirty_count"]) == ("main", 0, 0, 0)
+    assert s["remote_url"] == str(bare)
+    assert re.match(r"\d{4}-\d\d-\d\dT", s["last_commit_time"])
+    (a / "f").write_text("2")
+    (a / "new").write_text("x")
+    _git(a, "commit", "-qam", "two")
+    (a / "g").write_text("untracked")
+    s = store.git_state(a)
+    assert (s["ahead"], s["behind"], s["dirty_count"]) == (1, 0, 2)
+    b = tmp_path / "b"
+    _git(tmp_path, "clone", "-q", str(bare), str(b))
+    (b / "h").write_text("x")
+    _git(b, "add", "h")
+    _git(b, "commit", "-qm", "three")
+    _git(b, "push", "-q")
+    _git(a, "fetch", "-q")
+    assert (store.git_state(a)["ahead"], store.git_state(a)["behind"]) == (1, 1)

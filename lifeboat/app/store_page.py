@@ -125,7 +125,7 @@ class StoreSetup(AccountDialog):
 
     # -- 1. install skillshare
     def _install_page(self):
-        self.step_row = row("Installing skillshare", f"Version {store_install.SKILLSHARE_VERSION}, checked against a built-in hash")
+        self.step_row = row("Installing skillshare and the secret scanner", f"skillshare {store_install.SKILLSHARE_VERSION} and gitleaks {store_install.GITLEAKS_VERSION}, each checked against a built-in hash")
         self.step_row.add_suffix(spinner())
         pg = Adw.PreferencesPage()
         pg.add(group("Step 1 of 3", "skillshare keeps your skills in a git folder. Lifeboat adds a secret check before anything is pushed.",
@@ -135,17 +135,16 @@ class StoreSetup(AccountDialog):
 
     def _run_install(self):
         def work():
-            if store_install.skillshare_path() is None:
-                store_install.install()
+            store_install.ensure_installed()
             return catalogue.scan(Path.home()), store.current()
         self.win.in_thread(work, self._installed, lambda e: self._install_failed(e))
 
     def _install_failed(self, e):
         if self.dead:
             return
-        msg = str(e) if isinstance(e, store_install.InstallError) else "Could not download skillshare. Check your connection and try again."
+        msg = str(e) if isinstance(e, store_install.InstallError) else "Could not download the store tools. Check your connection and try again."
         self.set_can_close(True)
-        sp = Adw.StatusPage(icon_name="dialog-error-symbolic", title="Could not install skillshare", description=msg)
+        sp = Adw.StatusPage(icon_name="dialog-error-symbolic", title="Could not install the store tools", description=msg)
         sp.set_child(vbox(pill("Close", self.force_close, suggested=False)))
         self.install_page.toolbar.set_content(sp)
 

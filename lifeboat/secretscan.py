@@ -30,7 +30,7 @@ ZERO = "0" * 40
 
 
 def _git(repo, *args: str) -> str:
-    r = subprocess.run(["git", "-C", str(repo), *args], capture_output=True, text=True, check=False, errors="replace")
+    r = subprocess.run(["git", "-c", "core.quotePath=false", "-C", str(repo), *args], capture_output=True, text=True, check=False, errors="replace")
     return r.stdout if r.returncode == 0 else ""
 
 
@@ -83,12 +83,23 @@ def _risky_name(path: str) -> bool:
     return any(fnmatch.fnmatch(name, p) for p in RISKY_NAMES)
 
 
+_ESCAPES = {"n": "\n", "t": "\t", '"': '"', "\\": "\\", "a": "\a", "b": "\b", "f": "\f", "r": "\r", "v": "\v"}
+
+
+def _diff_path(raw: str) -> str | None:
+    """The file in a `+++ b/<path>` line, or None for /dev/null. Git quotes only names holding a quote, backslash or control character
+    (core.quotePath=false leaves non-ASCII as it is)."""
+    if raw.startswith('"'):
+        raw = re.sub(r"\\(?:([0-7]{3})|(.))", lambda m: chr(int(m.group(1), 8)) if m.group(1) else _ESCAPES.get(m.group(2), m.group(2)), raw[1:-1])
+    return raw[2:] if raw.startswith("b/") else None
+
+
 def _added_lines(diff: str):
     """Yield (file, line number in the new file, text) for every added line of a unified diff."""
     file, n = None, 0
     for raw in diff.splitlines():
         if raw.startswith("+++ "):
-            file = raw[6:] if raw.startswith("+++ b/") else None
+            file = _diff_path(raw[4:])
         elif raw.startswith("@@"):
             m = re.match(r"@@ -\S+ \+(\d+)", raw)
             n = int(m.group(1)) if m else 0
@@ -118,22 +129,25 @@ def _gitleaks(repo, base, head) -> list[dict]:
 def _history(repo, base: str | None, head: str):
     """(sha, file, line, text) for every line ANY commit in base..head adds, and (sha, file) for every file such a commit adds
     or changes. A secret added by one commit and removed by the next is invisible to a diff of the endpoints, but the first
-    commit is still pushed."""
-    out = _git(repo, "log", "--no-color", "-p", "-U0", "--no-ext-diff", "--format=LBCOMMIT:%H", f"{base}..{head}" if base else head)
-    sha, file, n, lines, files = "", None, 0, [], []
-    pending_file = None
-    for raw in out.splitlines():
+    commit is still pushed. A merge is read against its first parent, so what a merge resolution adds is seen too."""
+    spec = f"{base}..{head}" if base else head
+    common = ("log", "--no-color", "--no-ext-diff", "--diff-merges=first-parent", "--format=LBCOMMIT:%H")
+    files, sha, status = [], "", None
+    for tok in _git(repo, *common, "-z", "--name-status", "--no-renames", spec).split("\0"):  # -z: names are NUL-separated, never quoted
+        if tok.startswith("LBCOMMIT:"):
+            sha, status = tok[9:], None
+        elif status is None:
+            status = tok.strip() or None
+        else:
+            if status != "D" and sha:
+                files.append((sha, tok))
+            status = None
+    lines, file, n = [], None, 0
+    for raw in _git(repo, *common, "-p", "-U0", spec).splitlines():
         if raw.startswith("LBCOMMIT:"):
-            sha, file, pending_file = raw[9:], None, None
-        elif raw.startswith("diff --git "):
-            m = re.match(r"diff --git a/.* b/(.*)$", raw)
-            pending_file = m.group(1) if m else None
-            if pending_file:
-                files.append((sha, pending_file))
-        elif raw.startswith("deleted file mode") and pending_file:
-            files.remove((sha, pending_file))
+            sha, file = raw[9:], None
         elif raw.startswith("+++ "):
-            file = raw[6:] if raw.startswith("+++ b/") else None
+            file = _diff_path(raw[4:])
         elif raw.startswith("@@"):
             m = re.match(r"@@ -\S+ \+(\d+)", raw)
             n = int(m.group(1)) if m else 0
@@ -152,7 +166,7 @@ def scan_range(repo, base: str | None, head: str = "HEAD") -> list[dict]:
         found += [{**f, "commit": sha[:7]} for f in _scan_text(file, [text], n)]
     found += [{**_finding(f, 0, "risky-file-name"), "commit": sha[:7]} for sha, f in files if _risky_name(f)]
     if not base:
-        for f in _git(repo, "ls-tree", "-r", "--name-only", head).splitlines():
+        for f in filter(None, _git(repo, "ls-tree", "-r", "-z", "--name-only", head).split("\0")):
             found += _scan_text(f, _git(repo, "show", f"{head}:{f}").splitlines())
     return _allowed(repo, _dedupe(found + _gitleaks(repo, base, head)))
 
@@ -178,7 +192,7 @@ def scan_working_tree(repo) -> list[dict]:
             found += _scan_text(f, (Path(repo) / f).read_text(errors="replace").splitlines())
         except OSError:
             pass
-    changed = _git(repo, "diff", "--name-only", "HEAD").splitlines() + [f for f in untracked if f]
+    changed = list(filter(None, _git(repo, "diff", "--name-only", "-z", "HEAD").split("\0"))) + [f for f in untracked if f]
     return _allowed(repo, _dedupe(found + [_finding(f, 0, "risky-file-name") for f in changed if _risky_name(f)]))
 
 

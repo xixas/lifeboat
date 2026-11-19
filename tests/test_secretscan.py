@@ -363,3 +363,36 @@ def test_installing_in_a_folder_that_is_not_a_repo_raises_and_writes_nothing(tmp
     with pytest.raises(RuntimeError, match="not a git repository"):
         secretscan.install_pre_push_hook(plain)
     assert list(cwd.iterdir()) == [] and list(plain.iterdir()) == []
+
+
+# ---------------------------------------------------------------- scan gaps
+def test_a_secret_in_a_non_ascii_file_name_is_found_by_name(repo):
+    base = git(repo, "rev-parse", "HEAD")
+    head = commit(repo, {"nötes.md": f"line\n{AWS}\n", "clé.pem": "x\n"})
+    found = secretscan.scan_range(repo, base, head)
+    assert {(f["file"], f["rule"]) for f in found} == {("nötes.md", "aws-access-key"), ("clé.pem", "risky-file-name")}
+    whole = secretscan.scan_range(repo, None, head)  # no base: every tracked file is read too
+    assert ("nötes.md", 2) in {(f["file"], f["line"]) for f in whole}
+
+
+def test_the_working_tree_scan_finds_a_secret_in_a_non_ascii_file_name(repo):
+    (repo / "nötes.md").write_text(f"{AWS}\n")
+    assert [(f["file"], f["rule"]) for f in secretscan.scan_working_tree(repo)] == [("nötes.md", "aws-access-key")]
+    git(repo, "add", "-A")
+    git(repo, "commit", "-qm", "n")
+    (repo / "nötes.md").write_text(f"{AWS}\nmore {GH}\n")
+    assert ("nötes.md", "github-token") in {(f["file"], f["rule"]) for f in secretscan.scan_working_tree(repo)}
+
+
+def test_a_secret_added_only_in_a_merge_resolution_is_found(repo):
+    git(repo, "checkout", "-qb", "feature")
+    commit(repo, {"f.txt": "feature\n"})
+    git(repo, "checkout", "-q", "main")
+    commit(repo, {"m.txt": "main\n"})
+    base = git(repo, "rev-parse", "HEAD")
+    git(repo, "merge", "--no-commit", "--no-ff", "feature")
+    (repo / "resolved.txt").write_text(f"key {AWS}\n")  # nobody but the merge commit adds this
+    git(repo, "add", "-A")
+    git(repo, "commit", "-qm", "merge feature")
+    head = git(repo, "rev-parse", "HEAD")
+    assert ("resolved.txt", "aws-access-key") in {(f["file"], f["rule"]) for f in secretscan.scan_range(repo, base, head)}

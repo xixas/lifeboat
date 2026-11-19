@@ -36,6 +36,8 @@ documents every key.
 | `exclude` / `include` | rclone patterns. Do not combine them |
 | `filter_file` | An rclone `--filter-from` file, relative to the config folder. Use it for long rule lists |
 | `encrypted` | Display only. Encryption comes from the remote |
+| `links` | `true` stores symlinks as links (rclone `--links`) and recreates them on restore, instead of following them. A dangling link is fine. `add-job --links` sets it |
+| `[scan]` `ignore` | Item keys `lifeboat scan` still lists but marks ignored. Edit with `lifeboat ignore KEY` / `unignore KEY` |
 | `[schedule]` `daily_at`, `keep_days` | Daily run time (default 13:00) and how long old versions live (default 90) |
 | `[rclone]` `config`, `password_command` | A custom `rclone.conf`, and a command that prints its password if it is encrypted |
 | `[settings]` `command` | Runs before the jobs. Good for a dotfiles snapshot |
@@ -88,6 +90,9 @@ point `--to` at it. In the app, use the Restore page.
 | `lifeboat add-job`, `remove-job` | Edit jobs (see above). `add-job` also takes `--old`, `--include`, `--filter-file`, `--encrypted` |
 | `lifeboat run` | Settings command, then every job. Also `--dry-run`, `--settings-only`, `--no-settings` |
 | `lifeboat status` / `check [--dry-run]` | Verdict and per-job results / notify about problems (`--dry-run` prints instead) |
+| `lifeboat check --ack-dropped` | Stop the "No longer backed up: X" reminder. Each run records `coverage.json`; a folder or file an earlier run covered and the config no longer does is reported until you acknowledge it or add it back |
+| `lifeboat scan [--json]` | List what on this laptop could be backed up, by group (files, AI assistants, shell, dev tools, editors, desktop, keys, not backed up, other). Nothing is measured, so it is instant |
+| `lifeboat ignore KEY` / `unignore KEY` | Mark an item from `scan` as ignored, or undo it. Edits `[scan] ignore`; also takes `--dry-run`, `--json` |
 | `lifeboat versions`, `restore`, `prune` | See Restore above; delete old versions past `keep_days` |
 | `lifeboat install-timer` / `uninstall-timer` | Manage the systemd timers |
 

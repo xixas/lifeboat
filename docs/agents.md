@@ -15,14 +15,17 @@ Install the skill (copy `skills/lifeboat` to `~/.claude/skills/`, or `npx skills
 | `lifeboat config` | Is the config there and valid? | `{path, exists, ok, error, jobs}` |
 | `lifeboat init` | Write an example config. Refuses if one exists | none |
 | `lifeboat remotes` | rclone remotes and types | `{remotes: [{name: "gdrive:", type: "drive"}]}` |
-| `lifeboat jobs` | Configured jobs | `{config_path, jobs: [{name, source, dest, old, exclude, include, filter_file, encrypted}]}` |
+| `lifeboat jobs` | Configured jobs | `{config_path, jobs: [{name, source, dest, old, exclude, include, filter_file, encrypted, links}]}` |
 | `lifeboat status` | Everything known, with a verdict | the full status document |
-| `lifeboat add-job NAME SOURCE DEST [--old] [--exclude]... [--include]... [--filter-file] [--encrypted] [--existing-dest] [--dry-run]` | Add a job | `{added: {...job}, config_path, dry_run}` |
+| `lifeboat add-job NAME SOURCE DEST [--old] [--exclude]... [--include]... [--filter-file] [--encrypted] [--links] [--existing-dest] [--dry-run]` | Add a job | `{added: {...job}, config_path, dry_run}` |
 | `lifeboat remove-job NAME [--dry-run]` | Remove a job | `{removed, config_path, dry_run}` |
 | `lifeboat run [--dry-run]` | Back up every job | the run result plus `settings_ok` |
 | `lifeboat versions JOB` | Old versions, newest first | `{job, versions: [...]}` |
 | `lifeboat restore JOB --to DIR [--version STAMP] [--dry-run]` | Copy files into `DIR` | `{ok, rc, job, to, version, dry_run}` |
 | `lifeboat check` | Problems the timer would warn about | `{problems: [...]}`. Never notifies. Exit 1 if not empty |
+| `lifeboat check --ack-dropped` | Clear the "No longer backed up" reminder (`status --json` has `dropped`) | none |
+| `lifeboat scan` | What on this laptop could be backed up | `{items: [{key, label, group, path, kind, secret, default_on, exclude, links, ignored, link_count?}]}` |
+| `lifeboat ignore KEY` / `unignore KEY [--dry-run]` | Hide or unhide a scan item (`[scan] ignore`) | `{ignored or unignored, config_path, dry_run}` |
 | `lifeboat prune` | Delete old versions past `keep_days` | the prune result |
 
 - **JSON:** with `--json`, stdout is exactly one JSON document. Progress and rclone output go to stderr.
@@ -33,6 +36,11 @@ Install the skill (copy `skills/lifeboat` to `~/.claude/skills/`, or `npx skills
 - **`add-job` refuses** a missing source, an unknown remote, a non-empty DEST, a duplicate name, `include` with `exclude`,
   and `old` equal to `dest`. Pass `--existing-dest` only when DEST holds this job's own earlier Lifeboat backup.
 - **`--encrypted`** is a display flag. Encryption comes from the remote.
+- **`--links`** (job key `links`) stores symlinks as links instead of following them. Use it for agent folders such as
+  `~/.claude`, whose skills are symlinks into a git checkout.
+- **`scan`** groups what it finds. Items with `secret: true` belong only on a crypt remote. A `Linked: <path>` item is the
+  checkout or folder that an agent folder's symlinks point to, with `link_count` links into it; it needs its own job or
+  those links would restore dangling.
 
 ## Recipes
 
@@ -62,6 +70,12 @@ lifeboat restore NAME --to "$(mktemp -d)" --dry-run --json
 ```
 
 A real restore into a fresh temporary folder is also safe. Compare it with the source, then delete the folder.
+
+**Find what is not backed up**
+
+`lifeboat scan --json`, then compare each item's `path` with `lifeboat jobs --json`. Offer the user the missing items, and
+`lifeboat ignore KEY` for any they never want. Agent folders (`group: "ai"`) come with an `exclude` list that leaves out chat
+history, logins and caches: pass it to `add-job` as `--exclude` and add `--links --encrypted`.
 
 **Check health**
 

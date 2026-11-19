@@ -369,10 +369,10 @@ def run_backup(cfg: Config, dry_run: bool = False, now: datetime | None = None, 
             from lifeboat import store  # late: store imports this module
             try:
                 pushed = store.run_daily(cfg)
-                rl.line("", "Config store: " + ("pushed" if pushed["pushed"] else "nothing to push" if pushed["ok"] else
-                                              "push blocked, secret found" if pushed["blocked_findings"] else f"not pushed ({pushed['error']})"))
+                rl.line("", "Skills on GitHub: " + ("uploaded" if pushed["pushed"] else "nothing to upload" if pushed["ok"] else
+                                                 "upload blocked, secret found" if pushed["blocked_findings"] else f"not uploaded ({pushed['error']})"))
             except Exception as e:  # noqa: BLE001
-                rl.line("", f"Config store: not pushed ({e})")
+                rl.line("", f"Skills on GitHub: not uploaded ({e})")
         failed = sum(r["rc"] != 0 for r in results)
         if dry_run:
             rl.line("", "Finished: dry run, nothing was changed")
@@ -549,7 +549,8 @@ def remote_names(cfg: Config) -> list[str]:
     return seen
 
 
-def status(cfg: Config) -> dict:
+def status(cfg: Config, store_signed_out: bool = False) -> dict:
+    """`store_signed_out`: the app found the GitHub sign-in missing, which the engine (no keyring) cannot see."""
     sd = state_dir()
     last = read_json(sd / "last-run.json")
     results = {r["name"]: r for r in (last or {}).get("jobs", [])}
@@ -569,11 +570,11 @@ def status(cfg: Config) -> dict:
     if cfg.skills_enabled:
         from lifeboat.skills import skills
         d["skills"] = skills()
-    _verdict(d)
+    _verdict(d, store_signed_out)
     return d
 
 
-def _verdict(d: dict) -> None:
+def _verdict(d: dict, store_signed_out: bool = False) -> None:
     last, age = d["last"], d["last_age_days"]
     if not d["rclone"]["found"]:
         b = "error"
@@ -607,31 +608,57 @@ def _verdict(d: dict) -> None:
         weakest = f"The last backup is more than {STALE_DAYS} days old."
     if d["dropped"] and title == "Fully covered":
         title, weakest, s["overview"] = "Partly covered", "Something you backed up before is no longer included.", "warn"
+    if title == "Fully covered" and d["store_push"] is not None and (store_signed_out or not d["store_push"].get("ok")):
+        title, weakest, s["overview"] = "Partly covered", "Backed up, but skills are not on GitHub", "warn"
     d["status"] = s
     d["verdict"] = {"title": title, "weakest": weakest}
+
+
+RULE_NAMES = {"aws-access-key": "AWS access key", "aws-access-token": "AWS access key", "github-token": "GitHub token", "github-pat": "GitHub token",
+              "github-fine-grained-pat": "GitHub token", "github-oauth": "GitHub token", "github-app-token": "GitHub token",
+              "slack-token": "Slack token", "slack-bot-token": "Slack token", "slack-user-token": "Slack token", "private-key": "Private key",
+              "google-api-key": "Google API key", "gcp-api-key": "Google API key", "anthropic-key": "Anthropic API key",
+              "anthropic-api-key": "Anthropic API key", "openai-key": "OpenAI API key", "openai-api-key": "OpenAI API key", "jwt": "JSON web token",
+              "generic-secret": "Password or secret", "generic-api-key": "API key", "bearer-token": "Bearer token"}
+
+
+def finding_text(f: dict) -> str:
+    """'Line 3 · AWS access key', plus ' · in unsent change abc1234' when the secret sits in a commit that was never uploaded."""
+    rule = RULE_NAMES.get(f["rule"]) or f["rule"].replace("-", " ").capitalize()
+    return f"Line {f['line']} \u00b7 {rule}" + (f" \u00b7 in unsent change {f['commit']}" if f.get("commit") else "")
+
+
+NETWORK_ERROR = re.compile(r"resolve host|reach github|unable to access|timed out|connection (?:refused|reset)|network is unreachable", re.I)
+
+
+def upload_error_text(error: str | None) -> str:
+    """What a failed upload says: a plain sentence for a network failure, the reason itself otherwise."""
+    if not error:
+        return "The last upload did not complete."
+    return "Could not reach GitHub. Lifeboat retries after the next backup." if NETWORK_ERROR.search(error) else error
 
 
 def _blocked_body(last: dict) -> str:
     commit = next((f["commit"] for f in last["blocked_findings"] if f.get("commit")), None)
     if not commit:
-        return "Remove the secret from the store folder; nothing was pushed to GitHub."
+        return "Remove the secret from the store folder; nothing was uploaded to GitHub."
     fix = (f"git -C {last['repo']} reset --soft {last['upstream']}, then remove the secret and commit again."
            if last.get("repo") and last.get("upstream") else "rewrite that commit without the secret.")
-    return f"The secret is in unpushed commit {commit}, so it would reach GitHub even if a later commit removes it. Fix: {fix} Nothing was pushed."
+    return f"The secret is in unsent commit {commit}, so it would reach GitHub even if a later commit removes it. Fix: {fix} Nothing was uploaded."
 
 
 def _store_problems(last: dict | None) -> list[dict]:
     if not last or last.get("ok"):
         return []
     if last.get("blocked_findings"):
-        return [{"page": "store", "title": "Config store push blocked: secret found in " + last["blocked_findings"][0]["file"], "urgent": True,
+        return [{"page": "store", "title": "Skills on GitHub: upload blocked, secret found in " + last["blocked_findings"][0]["file"], "urgent": True,
                  "body": _blocked_body(last)}]
     if last.get("signed_out"):
-        return [{"page": "store", "title": "Config store: " + last["signed_out"], "urgent": True,
-                 "body": "Nothing was pushed. Sign in again on the Config store page."}]
+        return [{"page": "store", "title": "Skills on GitHub: " + last["signed_out"], "urgent": True,
+                 "body": "Nothing was uploaded. Sign in again on the Skills on GitHub page."}]
     days = int(age_days(last.get("last_ok_time") or last.get("time")) or 0)
-    title = f"Config store not pushed for {days} days" if days else "Config store push failed"
-    return [{"page": "store", "title": title, "body": last.get("error") or "The last push did not complete.", "urgent": days >= STALE_DAYS}]
+    title = f"Skills on GitHub not uploaded for {days} days" if days else "Skills on GitHub upload failed"
+    return [{"page": "store", "title": title, "body": upload_error_text(last.get("error")), "urgent": days >= STALE_DAYS}]
 
 
 def problems(cfg: Config, st: dict) -> list[dict]:

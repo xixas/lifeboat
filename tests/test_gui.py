@@ -1489,7 +1489,7 @@ engine.write_json("store.json", {"time": datetime.now(timezone.utc).isoformat(),
                                  "blocked_findings": [{"file": "skills/x/.env", "line": 3, "rule": "aws-access-key"}], "last_ok_time": None})
 win.apply(gather())
 win.show_page("overview")
-assert any(t.startswith("Config store push blocked") for t in labels(win)), labels(win)
+assert any(t.startswith("Skills on GitHub: upload blocked") for t in labels(win)), labels(win)
 click(win, "Open")  # a store problem on Overview leads to the store page
 assert win.page == "store"
 assert "skills/x/.env:3:aws-access-key" in labels(win), labels(win)

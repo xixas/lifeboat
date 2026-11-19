@@ -230,7 +230,7 @@ def test_a_configured_store_never_pushes_without_a_lifeboat_token(source, tmp_pa
     monkeypatch.setattr(store.github, "push", lambda *a, **kw: calls.append(a) or {"ok": True, "error": ""})
     monkeypatch.setattr(store.store_install, "run_skillshare", lambda *a, **kw: calls.append(a))
     r = store.run_daily(_cfg(source), gh=NoToken())
-    assert r["ok"] is False and r["pushed"] is False and r["signed_out"] == "Signed out: sign in to push"
+    assert r["ok"] is False and r["pushed"] is False and r["signed_out"] == "Signed out of GitHub"
     assert calls == [] and store.git_state(source)["dirty_count"] == 1
     assert (source / ".git" / "hooks" / "pre-push").exists()
 
@@ -293,11 +293,11 @@ def test_status_and_problems_report_store_push(source, tmp_path, make_cfg, monke
     ago = lambda d: (datetime.now().astimezone() - timedelta(days=d)).isoformat(timespec="seconds")  # noqa: E731
     engine.write_json("store.json", {"time": ago(0), "ok": False, "pushed": False, "blocked_findings": [{"file": "skills/x/SKILL.md", "line": 2, "rule": "aws-access-key"}], "error": "", "last_ok_time": ago(1)})
     st = engine_status(cfg)
-    assert any(p["title"] == "Config store push blocked: secret found in skills/x/SKILL.md" and p["urgent"] for p in engine.problems(cfg, st))
+    assert any(p["title"] == "Skills on GitHub: upload blocked, secret found in skills/x/SKILL.md" and p["urgent"] for p in engine.problems(cfg, st))
     engine.write_json("store.json", {"time": ago(0), "ok": False, "pushed": False, "blocked_findings": [], "error": "boom", "last_ok_time": ago(3)})
-    assert any(p["title"] == "Config store not pushed for 3 days" for p in engine.problems(cfg, engine_status(cfg)))
+    assert any(p["title"] == "Skills on GitHub not uploaded for 3 days" for p in engine.problems(cfg, engine_status(cfg)))
     engine.write_json("store.json", {"time": ago(0), "ok": True, "pushed": True, "blocked_findings": [], "error": "", "last_ok_time": ago(0)})
-    assert not any("Config store" in p["title"] for p in engine.problems(cfg, engine_status(cfg)))
+    assert not any("Skills on GitHub" in p["title"] for p in engine.problems(cfg, engine_status(cfg)))
 
 
 def engine_status(cfg):
@@ -403,7 +403,7 @@ def test_a_secret_in_an_unpushed_commit_blocks_even_if_the_next_commit_removes_i
     assert [(f["file"], f["commit"]) for f in r["blocked_findings"]] == [("SKILL.md", sha)] and AWS not in str(r)
     probs = store.engine.problems(cfg, engine_status(cfg))
     body = next(p["body"] for p in probs if p["page"] == "store")
-    assert f"unpushed commit {sha}" in body
+    assert f"unsent commit {sha}" in body
     assert f"git -C {source} reset --soft origin/main" in body and "commit again" in body
 
 
@@ -479,7 +479,7 @@ def test_the_signed_out_store_raises_a_problem_on_the_store_page(source, tmp_pat
     cfg = _cfg(source)
     store.run_daily(cfg, gh=NoToken())
     p = next(p for p in store.engine.problems(cfg, engine_status(cfg)) if p["page"] == "store")
-    assert "Signed out" in p["title"] and "Sign in" in p["body"]
+    assert p["title"] == "Skills on GitHub: Signed out of GitHub" and "Sign in" in p["body"] and "Nothing was uploaded" in p["body"]
 
 
 def test_a_rejected_token_signs_out_with_the_reason_access_was_revoked(source, tmp_path, monkeypatch):
@@ -517,7 +517,7 @@ def test_the_revoked_sign_in_problem_title_is_in_sentence_case(source):
     store.engine.write_json("store.json", {"time": store.engine.now_iso(), "ok": False, "pushed": False, "blocked_findings": [],
                                            "error": "", "signed_out": "GitHub access was revoked", "last_ok_time": None})
     p = next(p for p in store.engine.problems(cfg, engine_status(cfg)) if p["page"] == "store")
-    assert p["title"] == "Config store: GitHub access was revoked"
+    assert p["title"] == "Skills on GitHub: GitHub access was revoked"
 
 
 # ---------------------------------------------------------------- the push is hermetic
@@ -610,3 +610,21 @@ def test_the_apps_push_survives_a_crashed_or_silent_subprocess(monkeypatch):
         raise subprocess.TimeoutExpired(argv, 1)
     monkeypatch.setattr(store.subprocess, "run", hang)
     assert store.push_in_subprocess()["ok"] is False
+
+
+# ---------------------------------------------------------------- what the page says about an upload
+@pytest.mark.parametrize("finding, text", [
+    ({"rule": "aws-access-key", "line": 3}, "Line 3 \u00b7 AWS access key"),
+    ({"rule": "github-pat", "line": 41}, "Line 41 \u00b7 GitHub token"),
+    ({"rule": "some-new-rule", "line": 1}, "Line 1 \u00b7 Some new rule"),
+    ({"rule": "aws-access-key", "line": 3, "commit": "abc1234"}, "Line 3 \u00b7 AWS access key \u00b7 in unsent change abc1234"),
+])
+def test_a_finding_reads_as_line_friendly_rule_and_unsent_change(finding, text):
+    assert store.engine.finding_text(finding) == text
+
+
+def test_a_network_failure_reads_as_a_sentence_and_other_errors_pass_through():
+    assert store.engine.upload_error_text("fatal: unable to access: Could not resolve host: github.com") == "Could not reach GitHub. Lifeboat retries after the next backup."
+    assert store.engine.upload_error_text("could not reach github.com") == "Could not reach GitHub. Lifeboat retries after the next backup."
+    assert store.engine.upload_error_text("the store is not on a branch (detached HEAD)") == "the store is not on a branch (detached HEAD)"
+    assert store.engine.upload_error_text("") == "The last upload did not complete."

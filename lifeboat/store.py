@@ -143,7 +143,7 @@ def _push(repo: Path, gh) -> dict:
     `origin` itself: github.push goes to the https URL of the repo the app confirmed."""
     token = gh.token()
     if not token:
-        return {"ok": False, "error": "", "signed_out": "Signed out: sign in to push"}
+        return {"ok": False, "error": "", "signed_out": "Signed out of GitHub"}
     name, why = _confirmed_repo(repo, gh)
     if not name:
         return {"ok": False, "error": why}

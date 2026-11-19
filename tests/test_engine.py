@@ -818,6 +818,26 @@ def test_a_dropped_source_stops_the_verdict_saying_fully_covered(tmp_path, make_
     assert engine.status(cfg)["verdict"]["title"] == "Fully covered"
 
 
+def test_the_verdict_is_not_fully_covered_while_the_skills_upload_is_failing(tmp_path, make_cfg, clock):
+    cfg = make_cfg()
+    (tmp_path / "src" / "a").write_text("a")
+    engine.run_backup(cfg, now=datetime.now())
+    cfg.store_source, cfg.store_push = str(tmp_path / "skills"), True
+    now = datetime.now().astimezone().isoformat(timespec="seconds")
+    engine.write_json("store.json", {"time": now, "ok": True, "pushed": True, "blocked_findings": [], "error": "", "last_ok_time": now})
+    assert engine.status(cfg)["verdict"]["title"] == "Fully covered"
+    for bad in ({"blocked_findings": [{"file": "a", "line": 1, "rule": "x"}]}, {"error": "boom"}, {"signed_out": "Signed out of GitHub"}):
+        engine.write_json("store.json", {"time": now, "ok": False, "pushed": False, "blocked_findings": [], "error": "", "last_ok_time": now, **bad})
+        st = engine.status(cfg)
+        assert st["verdict"] == {"title": "Partly covered", "weakest": "Backed up, but skills are not on GitHub"}, bad
+        assert st["status"]["overview"] == "warn"
+    engine.write_json("store.json", {"time": now, "ok": True, "pushed": True, "blocked_findings": [], "error": "", "last_ok_time": now})
+    st = engine.status(cfg, store_signed_out=True)  # the user signed out by hand: the last upload was fine but the next cannot happen
+    assert st["verdict"]["weakest"] == "Backed up, but skills are not on GitHub" and st["status"]["overview"] == "warn"
+    cfg.store_push = False
+    assert engine.status(cfg, store_signed_out=True)["verdict"]["title"] == "Fully covered"
+
+
 def test_rewriting_a_source_with_or_without_tilde_is_not_a_dropped_source(tmp_path, make_cfg, clock, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path))
     cfg = make_cfg()

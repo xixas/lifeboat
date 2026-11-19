@@ -32,7 +32,8 @@ def gather() -> dict:
         cfg = load_config(path)
     except ConfigError as e:
         return {"kind": "error", "path": path, "error": str(e)}
-    st = engine.status(cfg)
+    store_info = store_page.gather_store(cfg)
+    st = engine.status(cfg, store_signed_out=store_info["set_up"] and not store_info["signed_in"])
     d = {"kind": "ok", "path": path, "cfg": cfg, "st": st, "new_items": [], "dropped_items": [(s, None) for s in st["dropped"]]}
     items = []
     try:  # the scan only adds alerts: if it fails the window still shows the status
@@ -41,7 +42,7 @@ def gather() -> dict:
         d["dropped_items"] = found.match_dropped(st["dropped"], items)
     except OSError as e:
         print("scan failed:", e, file=sys.stderr)
-    d["store"] = store_page.gather_store(cfg)
+    d["store"] = store_info
     if st["skills"] is not None:
         d["skills_cover"] = skills.coverage(cfg, st["last"], st["skills"]["own"], items)
     return d

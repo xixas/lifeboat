@@ -171,33 +171,25 @@ def _cfg(src, push=True):
     return parse({"jobs": [{"name": "d", "source": "/x", "dest": "a:b", "old": "a:c"}], "store": {"source": str(src), "push": push}})
 
 
-def _skillshare_push(tmp_path, log):
-    """A fake skillshare whose `push` commits everything and pushes, like the real one."""
-    p = tmp_path / "skillshare"
-    p.write_text(f'#!/bin/sh\necho "$*" >> {log}\ngit add -A && git -c user.name=t -c user.email=t@t commit -qm "Update skills" && git push -q\n')
-    p.chmod(0o755)
-    return p
-
-
 def test_daily_push_blocks_on_secret_and_does_not_push(source, tmp_path):
     (source / "skills").mkdir()
     (source / "skills" / "SKILL.md").write_text(f"key {AWS}\n")
-    log = tmp_path / "ss.log"
-    r = store.run_daily(_cfg(source), gh=NoToken(), binary=_skillshare_push(tmp_path, log))
+    r = store.run_daily(_cfg(source), gh=NoToken())
     assert r["ok"] is False and r["pushed"] is False
     assert r["blocked_findings"][0]["file"] == "skills/SKILL.md" and AWS not in str(r)
-    assert not log.exists()
     assert store.engine.read_json(store.engine.state_dir() / "store.json")["blocked_findings"]
 
 
-def test_daily_push_with_skillshare_when_no_lifeboat_token(source, tmp_path):
+def test_a_configured_store_never_pushes_without_a_lifeboat_token(source, tmp_path, monkeypatch):
+    """No fallback to skillshare push or to system credentials: no token means signed out, nothing committed or pushed."""
     (source / "skills").mkdir()
     (source / "skills" / "SKILL.md").write_text("# fine\n")
-    log = tmp_path / "ss.log"
-    r = store.run_daily(_cfg(source), gh=NoToken(), binary=_skillshare_push(tmp_path, log))
-    assert r["ok"] and r["pushed"] and r["blocked_findings"] == [] and r["error"] == ""
-    assert log.read_text().strip() == "push"
-    assert store.git_state(source)["ahead"] == 0
+    calls = []
+    monkeypatch.setattr(store.github, "push", lambda *a, **kw: calls.append(a) or {"ok": True, "error": ""})
+    monkeypatch.setattr(store.store_install, "run_skillshare", lambda *a, **kw: calls.append(a))
+    r = store.run_daily(_cfg(source), gh=NoToken())
+    assert r["ok"] is False and r["pushed"] is False and r["signed_out"] == "Signed out: sign in to push"
+    assert calls == [] and store.git_state(source)["dirty_count"] == 1
     assert (source / ".git" / "hooks" / "pre-push").exists()
 
 
@@ -205,24 +197,21 @@ def test_daily_push_with_lifeboat_token_uses_git_push(source, tmp_path, monkeypa
     (source / "a.md").write_text("# fine\n")
     pushed = []
     monkeypatch.setattr(store.github, "push", lambda path, token, **kw: pushed.append((str(path), token)) or {"ok": True, "error": ""})
-    log = tmp_path / "ss.log"
-    r = store.run_daily(_cfg(source), gh=Token(), binary=_skillshare_push(tmp_path, log))
-    assert r["ok"] and r["pushed"] and not log.exists()
+    r = store.run_daily(_cfg(source), gh=Token())
+    assert r["ok"] and r["pushed"]
     assert pushed == [(str(source), "ghu_" + "z" * 36)]
     assert store.git_state(source)["dirty_count"] == 0  # committed first
 
 
 def test_daily_push_nothing_to_push(source, tmp_path):
-    r = store.run_daily(_cfg(source), gh=NoToken(), binary=_skillshare_push(tmp_path, tmp_path / "l"))
+    r = store.run_daily(_cfg(source), gh=NoToken())
     assert r["ok"] is True and r["pushed"] is False
 
 
-def test_daily_push_failure_recorded(source, tmp_path):
+def test_daily_push_failure_recorded(source, tmp_path, monkeypatch):
     (source / "a.md").write_text("ok\n")
-    p = tmp_path / "skillshare"
-    p.write_text("#!/bin/sh\necho no remote >&2\nexit 1\n")
-    p.chmod(0o755)
-    r = store.run_daily(_cfg(source), gh=NoToken(), binary=p)
+    monkeypatch.setattr(store.github, "push", lambda *a, **kw: {"ok": False, "error": "no remote"})
+    r = store.run_daily(_cfg(source), gh=Token())
     assert r["ok"] is False and "no remote" in r["error"]
 
 
@@ -233,9 +222,9 @@ def test_daily_push_off_or_unconfigured(source, tmp_path):
 
 def test_last_ok_time_carries_forward(source, tmp_path):
     cfg = _cfg(source)
-    ok = store.run_daily(cfg, gh=NoToken(), binary=_skillshare_push(tmp_path, tmp_path / "l"))
+    ok = store.run_daily(cfg, gh=NoToken())
     (source / "s.md").write_text(f"{AWS}\n")
-    bad = store.run_daily(cfg, gh=NoToken(), binary=_skillshare_push(tmp_path, tmp_path / "l"))
+    bad = store.run_daily(cfg, gh=NoToken())
     assert bad["ok"] is False and bad["last_ok_time"] == ok["time"]
 
 
@@ -351,10 +340,9 @@ def test_a_secret_in_an_unpushed_commit_blocks_even_if_the_next_commit_removes_i
     sha = _git(source, "rev-parse", "--short=7", "HEAD").strip()
     (source / "SKILL.md").write_text("clean\n")
     _git(source, "commit", "-qam", "fix")
-    log = tmp_path / "ss.log"
     cfg = _cfg(source)
-    r = store.run_daily(cfg, gh=NoToken(), binary=_skillshare_push(tmp_path, log))
-    assert r["ok"] is False and r["pushed"] is False and not log.exists()
+    r = store.run_daily(cfg, gh=NoToken())
+    assert r["ok"] is False and r["pushed"] is False
     assert [(f["file"], f["commit"]) for f in r["blocked_findings"]] == [("SKILL.md", sha)] and AWS not in str(r)
     probs = store.engine.problems(cfg, engine_status(cfg))
     body = next(p["body"] for p in probs if p["page"] == "store")
@@ -427,20 +415,10 @@ class RevokedGH:
         self.signed_out = True
 
 
-def _connected_cfg(src):
-    from lifeboat.config import parse
-    return parse({"jobs": [{"name": "d", "source": "/x", "dest": "a:b", "old": "a:c"}],
-                  "store": {"source": str(src), "push": True, "github": True}})
-
-
-def test_a_store_connected_through_lifeboat_never_pushes_without_a_lifeboat_token(source, tmp_path):
+def test_the_signed_out_store_raises_a_problem_on_the_store_page(source, tmp_path):
     (source / "a.md").write_text("# new\n")
-    log = tmp_path / "ss.log"
-    cfg = _connected_cfg(source)
-    assert cfg.store_github is True
-    r = store.run_daily(cfg, gh=NoToken(), binary=_skillshare_push(tmp_path, log))
-    assert r["ok"] is False and r["pushed"] is False and r["signed_out"] == "Signed out: sign in to push"
-    assert not log.exists() and store.git_state(source)["dirty_count"] == 1  # no skillshare push, nothing committed either
+    cfg = _cfg(source)
+    store.run_daily(cfg, gh=NoToken())
     p = next(p for p in store.engine.problems(cfg, engine_status(cfg)) if p["page"] == "store")
     assert "Signed out" in p["title"] and "Sign in" in p["body"]
 
@@ -449,7 +427,7 @@ def test_a_rejected_token_signs_out_with_the_reason_access_was_revoked(source, t
     (source / "a.md").write_text("# new\n")
     monkeypatch.setattr(store.github, "push", lambda *a, **kw: {"ok": False, "error": "fatal: unable to access: The requested URL returned error: 403"})
     gh = RevokedGH()
-    r = store.run_daily(_connected_cfg(source), gh=gh)
+    r = store.run_daily(_cfg(source), gh=gh)
     assert r["ok"] is False and r["signed_out"] == "GitHub access was revoked" and gh.signed_out is True
 
 
@@ -457,12 +435,5 @@ def test_a_failed_push_that_is_not_an_auth_error_stays_signed_in(source, tmp_pat
     (source / "a.md").write_text("# new\n")
     monkeypatch.setattr(store.github, "push", lambda *a, **kw: {"ok": False, "error": "could not resolve host"})
     gh = RevokedGH()
-    r = store.run_daily(_connected_cfg(source), gh=gh)
+    r = store.run_daily(_cfg(source), gh=gh)
     assert r["ok"] is False and not r.get("signed_out") and gh.signed_out is False
-
-
-def test_a_store_not_connected_through_lifeboat_still_falls_back_to_skillshare(source, tmp_path):
-    (source / "a.md").write_text("# new\n")
-    log = tmp_path / "ss.log"
-    r = store.run_daily(_cfg(source), gh=NoToken(), binary=_skillshare_push(tmp_path, log))
-    assert r["ok"] and log.exists()

@@ -255,8 +255,8 @@ def test_set_store_text_adds_or_replaces_the_store_table():
     assert config.validate_text(again).jobs[0].name == "d"
 
 
-def test_store_github_marks_a_store_connected_through_lifeboat():
-    base = '[[jobs]]\nname = "d"\nsource = "~/D"\ndest = "x:d"\nold = "x:_old"\n'
-    assert config.validate_text(base).store_github is False
-    text = config.set_store_text(base, "~/s", github=True)
-    assert "github = true" in text and config.validate_text(text).store_github is True
+def test_an_old_store_github_key_is_ignored_and_never_written():
+    base = '[[jobs]]\nname = "a"\nsource = "/s"\ndest = "x:y"\nold = "x:z"\n'
+    text = config.set_store_text(base, "~/s")
+    assert "github" not in text and not hasattr(config.validate_text(text), "store_github")
+    assert config.validate_text(text + "github = true\n").store_source == "~/s"

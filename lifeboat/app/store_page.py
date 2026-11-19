@@ -326,7 +326,7 @@ class StoreSetup(AccountDialog):
         if not self.remote:
             store.connect_remote(self.source, repo["clone_url"])
         path = self.win.cfg.path
-        write_config_text(path, set_store_text(path.read_text(encoding="utf-8"), tilde(self.source), github=True))
+        write_config_text(path, set_store_text(path.read_text(encoding="utf-8"), tilde(self.source)))
         store.clear_signed_out()
         return repo
 

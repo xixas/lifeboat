@@ -47,7 +47,6 @@ class Config:
     scan_ignore: list[str] = field(default_factory=list)
     store_source: str = ""
     store_push: bool = False
-    store_github: bool = False  # connected through Lifeboat's GitHub sign-in: never push with another login
     path: Path = field(default_factory=lambda: config_path())
 
     def job(self, name: str) -> Job:
@@ -120,10 +119,9 @@ def parse(data: dict, path: Path | None = None) -> Config:
         scan_ignore=_get(scn, "scan", "ignore", list, []),
         store_source=_get(sto, "store", "source", str, ""),
         store_push=_get(sto, "store", "push", bool, False),
-        store_github=_get(sto, "store", "github", bool, False),
     )
     for k in sto:
-        if k not in ("source", "push", "github"):
+        if k not in ("source", "push", "github"):  # github: written by an unreleased build, ignored
             raise ConfigError(f"store.{k} is not a known key")
     for k in scn:
         if k != "ignore":
@@ -319,11 +317,11 @@ def remove_ignore_text(text: str, key: str) -> str:
     return _set_ignore(text, [k for k in have if k != key]) if key in have else text
 
 
-def set_store_text(text: str, source: str, push: bool = True, github: bool = False) -> str:
+def set_store_text(text: str, source: str, push: bool = True) -> str:
     """text with a [store] table holding source and push (any earlier [store] table is replaced)."""
     segs = _segments(text)
     keep = [seg for seg in segs if next((ln for ln in seg.splitlines() if ln.strip() and not ln.lstrip().startswith("#")), "").strip() != "[store]"]
-    new = "".join(keep).rstrip("\n") + f"\n\n[store]\nsource = {json.dumps(source, ensure_ascii=False)}\npush = {'true' if push else 'false'}\n" + ("github = true\n" if github else "")
+    new = "".join(keep).rstrip("\n") + f"\n\n[store]\nsource = {json.dumps(source, ensure_ascii=False)}\npush = {'true' if push else 'false'}\n"
     validate_text(new)
     return new
 

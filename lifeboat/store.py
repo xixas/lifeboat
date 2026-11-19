@@ -115,34 +115,20 @@ def _record(result: dict) -> dict:
 AUTH_FAILED = re.compile(r"\b40[13]\b|Authentication failed|Invalid username or password", re.I)
 
 
-def _push(repo: Path, gh, binary, first_branch: str | None = None, connected: bool = False) -> dict:
-    """Push with Lifeboat's own GitHub token when it has one. A store connected through Lifeboat never falls back to another
-    login; any other store falls back to `skillshare push` (never `sync`)."""
+def _push(repo: Path, gh, first_branch: str | None = None) -> dict:
+    """Push with Lifeboat's own GitHub token, and only with it: never `skillshare push`, never another login on this machine."""
     token = gh.token()
-    if connected and not token:
+    if not token:
         return {"ok": False, "error": "", "signed_out": "Signed out: sign in to push"}
-    if token:
-        if (git_state(repo)["dirty_count"]):
-            for args in (["add", "-A"], ["-c", "user.name=Lifeboat", "-c", "user.email=lifeboat@localhost", "commit", "-qm", "Update skills"]):
-                if _git(repo, *args) is None:
-                    return {"ok": False, "error": "could not commit the changes"}
-        out = github.push(repo, token, set_upstream=first_branch)
-        if not out["ok"] and AUTH_FAILED.search(out["error"]):
-            gh.sign_out()  # the token no longer works: say so instead of failing the same way every day
-            return {**out, "signed_out": "GitHub access was revoked"}
-        return out
-    if first_branch:  # skillshare push has no upstream to push to yet
-        try:
-            r = subprocess.run(["git", "-C", str(repo), "push", "-u", "origin", first_branch], capture_output=True, text=True, timeout=180,
-                               check=False, env=dict(os.environ, GIT_TERMINAL_PROMPT="0"))
-        except (OSError, subprocess.TimeoutExpired) as e:
-            return {"ok": False, "error": str(e)}
-        return {"ok": r.returncode == 0, "error": "" if r.returncode == 0 else (r.stderr or r.stdout).strip()[-500:]}
-    binary = binary or store_install.skillshare_path() or shutil.which("skillshare")
-    if not binary:
-        return {"ok": False, "error": "skillshare is not installed and Lifeboat is not signed in to GitHub"}
-    r = store_install.run_skillshare(binary, ["push"], cwd=repo, timeout=180)
-    return {"ok": r.returncode == 0, "error": "" if r.returncode == 0 else (r.stderr or r.stdout).strip()[-500:]}
+    if git_state(repo)["dirty_count"]:
+        for args in (["add", "-A"], ["-c", "user.name=Lifeboat", "-c", "user.email=lifeboat@localhost", "commit", "-qm", "Update skills"]):
+            if _git(repo, *args) is None:
+                return {"ok": False, "error": "could not commit the changes"}
+    out = github.push(repo, token, set_upstream=first_branch)
+    if not out["ok"] and AUTH_FAILED.search(out["error"]):
+        gh.sign_out()  # the token no longer works: say so instead of failing the same way every day
+        return {**out, "signed_out": "GitHub access was revoked"}
+    return out
 
 
 def clear_signed_out() -> None:
@@ -152,7 +138,7 @@ def clear_signed_out() -> None:
         engine.write_json("store.json", {**last, "signed_out": ""})
 
 
-def run_daily(cfg: Config, gh=None, binary: Path | str | None = None) -> dict | None:
+def run_daily(cfg: Config, gh=None) -> dict | None:
     """Secret scan, then push the store. Records {time, ok, pushed, blocked_findings, error} in store.json. None if not set up."""
     if not (cfg.store_source and cfg.store_push):
         return None
@@ -179,7 +165,7 @@ def run_daily(cfg: Config, gh=None, binary: Path | str | None = None) -> dict | 
     if not before["dirty_count"] and not before["ahead"] and not first:
         result["ok"] = True
         return _record(result)
-    out = _push(repo, gh or github.GitHub(), binary, first, cfg.store_github)
+    out = _push(repo, gh or github.GitHub(), first)
     result.update(ok=out["ok"], pushed=out["ok"], error=out["error"], signed_out=out.get("signed_out", ""))
     return _record(result)
 

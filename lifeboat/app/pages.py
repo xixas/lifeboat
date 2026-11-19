@@ -109,6 +109,11 @@ class PagesMixin:
                 r.add_prefix(Gtk.Image.new_from_icon_name("system-lock-screen-symbolic"))
             jr.append(r)
         pg.add(group("Jobs", rows=jr))
+        more = row("Find more to back up", "Look for folders and settings on this laptop that no job covers")
+        more.set_activatable(True)
+        more.add_suffix(Gtk.Image.new_from_icon_name("go-next-symbolic"))
+        more.connect("activated", lambda *_: self.open_found())
+        pg.add(group(rows=[more]))
         pg.add(group(rows=[self._box([self.button("Back up now", self.run_backup, ("pill", "suggested-action")),
                                       self.button("Dry run", lambda: self.run_cli("Dry Run", "run", "--dry-run"))])]))
         pr, ptm = S["prune"], S["timers"]["lifeboat-prune"]

@@ -10,6 +10,7 @@ gi.require_version("Adw", "1")
 from gi.repository import Adw, Gio, GLib, Gtk  # noqa: E402
 
 from lifeboat import APP_ID, engine  # noqa: E402
+from lifeboat.app.found import FoundDialog  # noqa: E402
 from lifeboat.app.pages import PAGE_ICONS, PAGE_NAMES, PagesMixin  # noqa: E402
 from lifeboat.app.progress import BackupProgress, plan  # noqa: E402
 from lifeboat.app.reader import read_lines  # noqa: E402
@@ -185,6 +186,9 @@ class Win(PagesMixin, Adw.ApplicationWindow):
     # -- wizards
     def open_setup_wizard(self):
         SetupWizard(self).present(self)
+
+    def open_found(self):
+        FoundDialog(self).present(self)
 
     def open_restore_wizard(self, device=None, handover=None):
         RestoreWizard(self, device, handover).present(self)

@@ -1260,7 +1260,43 @@ assert rows()["Documents"].state == "error" and bp.summary.get_label() == "Backu
 print("PROGRESS OK")
 '''
 
+FOUND_BODY = r'''
+from lifeboat import config
+from lifeboat.app import found as app_found
+HOME = Path(sys.argv[1])
+cfg_path = config.config_path()
+docs_choice = {"key": "documents", "label": "Documents", "path": str(HOME / "Documents"), "secret": False}
+setup._write_new_config(cfg_path, "laptop", "13:00", setup.wizard_jobs("laptop", [docs_choice]))  # the prelude stubs write_wizard_config
+win = Win(None)
+win.present()
+win.apply(gather())
+assert win.cfg is not None, win.data
+win.show_page("backups")
+assert "Find more to back up" in labels(win), labels(win)
+dlg = app_found.FoundDialog(win)
+dlg.present(win)
+assert pump(lambda: hasattr(dlg, "list")), "the dialog never listed anything"
+rows = dlg.list.rows
+docs, claude, inkscape = (rows[str(HOME / d)] for d in ("Documents", ".claude", ".config/inkscape"))
+assert docs.get_active() and not docs.get_sensitive() and "already backed up" in docs.get_subtitle()
+assert not claude.get_active() and claude.get_sensitive() and not inkscape.get_active()
+shot("10-found", dlg.get_child())
+claude.set_active(True)  # turning an item on adds its job
+assert pump(lambda: any(j.name == "claude-code" for j in config.load_config(cfg_path).jobs)), "no job was added"
+job = config.load_config(cfg_path).job("claude-code")
+assert job.encrypted and job.links and job.source == "~/.claude" and job.dest == "lifeboat-secure:laptop/claude-code"
+assert not claude.get_sensitive() and "added" in claude.get_subtitle()
+click(inkscape, "Ignore")  # ignoring persists in the config
+assert pump(lambda: config.load_config(cfg_path).scan_ignore == ["config-inkscape"])
+assert dlg.list.ignored_group.get_visible()
+shot("11-found-ignored", dlg.get_child())
+click(dlg.list.ignored_group, "Restore")
+assert pump(lambda: config.load_config(cfg_path).scan_ignore == [])
+print("FOUND OK")
+'''
+
 WIZARD_SCRIPT = PRELUDE + SETUP_BODY
+FOUND_SCRIPT = PRELUDE + FOUND_BODY
 RESTORE_SCRIPT = PRELUDE + RESTORE_BODY
 PROGRESS_SCRIPT = PRELUDE + PROGRESS_BODY
 
@@ -1303,3 +1339,7 @@ def test_restore_wizard_walkthrough(env):
 
 def test_backup_checklist_dialog_follows_events(env):
     run_broadway(env, PROGRESS_SCRIPT, "PROGRESS OK")
+
+
+def test_found_dialog_adds_jobs_and_persists_ignore(env):
+    run_broadway(env, FOUND_SCRIPT, "FOUND OK")

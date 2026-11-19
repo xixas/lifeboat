@@ -1,12 +1,17 @@
 """The "found on this laptop" list: one preferences group per catalogue group and a collapsed "Ignored" expander.
 Shared by the setup wizard and the Found page. It owns the layout; the caller owns what a row's switch does."""
+from pathlib import Path
+
 import gi
 
 gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
 from gi.repository import Adw, GLib, Gtk  # noqa: E402
 
+from lifeboat import catalogue, found  # noqa: E402
+from lifeboat.app.widgets import spinner  # noqa: E402
 from lifeboat.app.wizard_state import tilde  # noqa: E402
+from lifeboat.config import ConfigError, load_config  # noqa: E402
 from lifeboat.found import grouped  # noqa: E402
 
 # These can hold dozens of rows nobody wants to read by default, so their rows sit in an expander.
@@ -107,3 +112,76 @@ class FoundList:
         self.ignored.discard(item["path"])
         self._render()
         self._on_restore(item)
+
+
+class FoundDialog(Adw.Dialog):
+    """Everything the catalogue finds on this laptop, after setup: folders a job already covers are on, and turning another on
+    adds a job to the config. Ignore and Restore edit the config's ignore list. Sizes are not measured here."""
+
+    def __init__(self, win):
+        super().__init__(title="Find more to back up", content_width=480, content_height=640, width_request=320, height_request=300)
+        self.win = win
+        self.dead = False
+        self.covered: dict[str, bool] = {}
+        self.view = Adw.ToolbarView()
+        self.view.add_top_bar(Adw.HeaderBar())
+        self.toasts = Adw.ToastOverlay(child=self.view)
+        self.set_child(self.toasts)
+        self.view.set_content(Adw.StatusPage(title="Looking around…", child=spinner(), css_classes=["compact"]))
+        self.connect("closed", lambda *_: setattr(self, "dead", True))
+        path = win.cfg.path
+        win.in_thread(lambda: (catalogue.scan(Path.home()), load_config(path)), self._loaded,
+                      lambda _e: self._failed("Could not look through this laptop."))
+
+    def _failed(self, text):
+        if not self.dead:
+            self.view.set_content(Adw.StatusPage(icon_name="dialog-error-symbolic", title="Nothing to show", description=text))
+
+    def _loaded(self, res):
+        if self.dead:
+            return
+        items, cfg = res
+        self.items = items
+        self.covered = {i["path"]: found.covered(i, cfg) for i in items}
+        self.list = FoundList(items, self._make_row, lambda i: self._ignore(i, True), lambda i: self._ignore(i, False))
+        pg = Adw.PreferencesPage()
+        pg.add(Adw.PreferencesGroup(description="Turn on what you want in your backup. Folders a job already covers are on."))
+        for g in self.list.groups:
+            pg.add(g)
+        pg.add(self.list.ignored_group)
+        self.view.set_content(pg)
+
+    def _make_row(self, item):
+        on = self.covered[item["path"]]
+        row = Adw.SwitchRow(title=item["label"], subtitle=tilde(item["path"]) + (" · already backed up" if on else ""), active=on,
+                            sensitive=not on, use_markup=False)
+        row.connect("notify::active", lambda r, _p: self._toggled(item, r))
+        return row
+
+    def _toggled(self, item, row):
+        if not row.get_active() or self.covered[item["path"]]:
+            return
+        self.covered[item["path"]] = True
+        row.set_sensitive(False)
+        path = self.win.cfg.path
+
+        def done(job):
+            row.set_subtitle(f"{tilde(item['path'])} · added, backed up from the next run")
+            self.toasts.add_toast(Adw.Toast.new(f"Added {item['label']} to your backup"))
+            self.win.refresh()
+
+        def fail(e):
+            self.covered[item["path"]] = False
+            row.set_sensitive(True)
+            row.set_active(False)
+            self.toasts.add_toast(Adw.Toast.new(str(e) if isinstance(e, ConfigError) else "Could not change the config"))
+
+        self.win.in_thread(lambda: found.add_item(load_config(path), item), done, fail)
+
+    def _ignore(self, item, on):
+        path = self.win.cfg.path
+
+        def fail(e):
+            self.toasts.add_toast(Adw.Toast.new(str(e) if isinstance(e, ConfigError) else "Could not change the config"))
+
+        self.win.in_thread(lambda: found.set_ignored(load_config(path), item["key"], on), lambda _r: self.win.refresh(), fail)

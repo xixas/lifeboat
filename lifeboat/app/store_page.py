@@ -168,13 +168,13 @@ class StoreSetup(AccountDialog):
         if self.dead:
             return
         if not isinstance(e, store_install.InstallError):
-            msg = "Could not download the store tools. Check your connection and try again."
+            msg = "Could not download skillshare. Check your connection and try again."
         elif "checksum mismatch" in str(e):
             msg = "The download did not match what Lifeboat expected, so nothing was installed."
         else:
             msg = str(e)
         self.set_can_close(True)
-        sp = Adw.StatusPage(icon_name="dialog-error-symbolic", title="Could not install the store tools", description=msg)
+        sp = Adw.StatusPage(icon_name="dialog-error-symbolic", title="Could not install skillshare", description=msg)
         sp.set_child(vbox(pill("Try again", self._retry_install), pill("Close", self.force_close, suggested=False)))
         self.install_page.toolbar.set_content(sp)
 
@@ -255,7 +255,7 @@ class StoreSetup(AccountDialog):
             n = 3
         else:
             steps.add(row("Your skills folder is already on GitHub", store.github_repo(self.remote)))
-        inst = row(f"{n}. Let Lifeboat into that repository only")
+        inst = row(f"{n}. Let Lifeboat into that repository only" if not self.remote else "Let Lifeboat into that repository only")
         inst.add_suffix(self._small("Open GitHub", lambda: self.win.open_url(github.install_url())))
         steps.add(inst)
         pg.add(steps)
@@ -372,7 +372,7 @@ class StoreSetup(AccountDialog):
         if self.dead:
             return
         self.nav.pop()
-        self._connect_error(github.GitHubError(str(e) if isinstance(e, ConfigError) else "Could not save the store settings."))
+        self._connect_error(github.GitHubError(str(e) if isinstance(e, ConfigError) else "Could not save your GitHub settings."))
 
     def _saved(self, repo):
         if self.dead:

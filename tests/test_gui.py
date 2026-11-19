@@ -1466,6 +1466,7 @@ assert pump(lambda: tagd() == "done"), tagd()
 cfg2 = config.load_config(cfg_path)
 assert (cfg2.store_source, cfg2.store_push) == ("~/projects/claude-config", True), (cfg2.store_source, cfg2.store_push)
 assert "xixas/skillshare-source" in subprocess.run(["git", "-C", str(repo), "remote", "get-url", "origin"], capture_output=True, text=True).stdout
+pump(timeout=1.0)  # let the slide-in finish so the snapshot is not mid-animation
 shot("66-store-done", dlg.get_child())
 click(dlg.get_child(), "Done")
 pump(timeout=0.5)

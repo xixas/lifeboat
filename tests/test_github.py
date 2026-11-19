@@ -1,7 +1,11 @@
 import json
 import os
 import re
+import signal
 import subprocess
+import sys
+import time
+from pathlib import Path
 
 import pytest
 
@@ -274,3 +278,38 @@ def test_an_expiring_token_with_no_refresh_token_means_sign_in_again():
     g, store = gh({}, now=1000)
     store.set(json.dumps({"access_token": TOKEN, "refresh_token": "", "expires_at": 1000}))
     assert g.token() is None and g.http.calls == []
+
+
+@pytest.mark.parametrize("sig", [signal.SIGTERM, signal.SIGHUP])
+def test_the_token_file_is_removed_when_the_process_gets_sigterm_or_sighup_mid_push(tmp_path, sig):
+    runtime = tmp_path / "run"
+    runtime.mkdir()
+    fakebin = tmp_path / "bin"
+    fakebin.mkdir()
+    started, gitpid = tmp_path / "started", tmp_path / "gitpid"
+    (fakebin / "git").write_text(f"#!/bin/sh\necho $$ > {gitpid}\ntouch {started}\nexec sleep 60\n")
+    (fakebin / "git").chmod(0o755)
+    code = "import sys; from lifeboat import github; github.push(sys.argv[1], 'tok-secret-123', timeout=120)"
+    env = dict(os.environ, XDG_RUNTIME_DIR=str(runtime), PATH=f"{fakebin}{os.pathsep}{os.environ['PATH']}",
+               PYTHONPATH=str(Path(github.__file__).parent.parent))
+    child = subprocess.Popen([sys.executable, "-c", code, str(tmp_path)], env=env)
+    try:
+        deadline = time.time() + 15
+        while not started.exists() and time.time() < deadline:
+            time.sleep(0.05)
+        assert started.exists() and [p for p in runtime.iterdir() if p.name.startswith("lifeboat-gh-")]
+        child.send_signal(sig)
+        assert child.wait(timeout=15) == -sig  # the default behaviour was re-raised
+        assert list(runtime.iterdir()) == []
+    finally:
+        child.kill() if child.poll() is None else None
+        if gitpid.exists():
+            os.kill(int(gitpid.read_text()), signal.SIGKILL)  # the fake git this test started
+
+
+def test_the_signal_handlers_are_restored_after_a_push(tmp_path, monkeypatch):
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
+    before = (signal.getsignal(signal.SIGTERM), signal.getsignal(signal.SIGHUP))
+    monkeypatch.setattr(github.subprocess, "run", lambda argv, **kw: subprocess.CompletedProcess(argv, 0, "", ""))
+    github.push(tmp_path, TOKEN)
+    assert (signal.getsignal(signal.SIGTERM), signal.getsignal(signal.SIGHUP)) == before

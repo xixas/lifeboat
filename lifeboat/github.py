@@ -9,6 +9,7 @@ import json
 import os
 import shlex
 import shutil
+import signal
 import subprocess
 import tempfile
 import time
@@ -169,24 +170,43 @@ class GitHub:
                 for i in installs for r in self._get(f"/user/installations/{i['id']}/repositories").get("repositories", [])]
 
 
+def _remove(path: str, folder: str | None) -> None:
+    try:
+        os.unlink(path)
+    except FileNotFoundError:
+        pass
+    if folder:
+        shutil.rmtree(folder, ignore_errors=True)
+
+
 @contextlib.contextmanager
 def _token_file(token: str):
-    """The token in a file only this user can read ($XDG_RUNTIME_DIR, else a 0700 temp dir), removed afterwards. It is passed to
-    git as a file, not through the environment, because git runs hooks (the secret check, a user's own) with that environment."""
+    """The token in a file only this user can read ($XDG_RUNTIME_DIR, which is tmpfs and cleared at logout, else a 0700 temp dir),
+    removed afterwards, also when the process gets SIGTERM or SIGHUP. It is passed to git as a file, not through the environment,
+    because git runs hooks (the secret check, a user's own) with that environment."""
     runtime = os.environ.get("XDG_RUNTIME_DIR")
     folder = tempfile.mkdtemp(prefix="lifeboat-") if not (runtime and os.path.isdir(runtime)) else None
     fd, path = tempfile.mkstemp(dir=folder or runtime, prefix="lifeboat-gh-")  # mkstemp creates the file 0600
+    previous = {}
+
+    def on_signal(signum, frame):
+        _remove(path, folder)
+        signal.signal(signum, signal.SIG_DFL)
+        os.kill(os.getpid(), signum)  # the default behaviour: the process ends as the signal says
+
     try:
+        for sig in (signal.SIGTERM, signal.SIGHUP):
+            try:
+                previous[sig] = signal.signal(sig, on_signal)
+            except ValueError:  # not the main thread: handlers cannot be installed here
+                break
         with os.fdopen(fd, "w") as f:
             f.write(token)
         yield path
     finally:
-        try:
-            os.unlink(path)
-        except FileNotFoundError:
-            pass
-        if folder:
-            shutil.rmtree(folder, ignore_errors=True)
+        for sig, handler in previous.items():
+            signal.signal(sig, handler)
+        _remove(path, folder)
 
 
 def push(repo_path, token: str, timeout: int = 120, set_upstream: str | None = None) -> dict:

@@ -270,6 +270,24 @@ assert ("drive_remote", TOKEN) in calls
 assert wiz.mode == "new"
 check_no_leak()
 shot("03-folders")
+import lifeboat.found as lifeboat_found
+lifeboat_found.apply_ignore = lambda path, keys: calls.append(("ignore", keys))
+titles = [g.get_title() for g in wiz.found.groups if g.get_visible()]
+assert titles == ["Files · 2", "AI assistants · 1", "Keys &amp; logins · 1", "Not backed up: rebuildable or huge · 1",
+                  "Other app settings · 1"], titles
+assert "encrypted" in wiz.found.groups[1].get_description() and not wiz.found.groups[0].get_description()
+assert not wiz.found.ignored_group.get_visible()
+exp = [w for g in wiz.found.groups[-2:] for w in walk(g) if isinstance(w, Adw.ExpanderRow)]
+assert len(exp) == 2 and not any(e.get_expanded() for e in exp)  # the rebuildable and other groups start collapsed
+assert "calculating" in wiz.rows[str(HOME / ".cache")].get_subtitle()  # and their sizes wait until they are opened
+click(wiz.rows[str(HOME / "Pictures")], "Ignore")
+assert wiz.found.groups[0].get_title() == "Files · 1" and wiz.found.ignored_group.get_visible()
+assert wiz.found.ignored_exp.get_title() == "Ignored · 1" and wiz.choices.ignored_keys() == ["pictures"]
+shot("03a-folders-ignored")
+click(wiz.found.ignored_group, "Restore")
+assert wiz.found.groups[0].get_title() == "Files · 2" and not wiz.found.ignored_group.get_visible()
+assert wiz.choices.ignored_keys() == [] and wiz.rows[str(HOME / "Pictures")].get_parent() is not None
+click(wiz.rows[str(HOME / "Pictures")], "Ignore")
 # nothing selected blocks Continue; bad name blocks Continue
 for p in list(wiz.rows):
     wiz.rows[p].set_active(False)
@@ -285,6 +303,8 @@ assert wiz.continue_btn.get_sensitive()
 wiz._pick_folder()
 assert str(HOME / "Extra") in wiz.rows
 assert pump(lambda: "Extra" in wiz.rows[str(HOME / "Extra")].get_subtitle() and "calculating" not in wiz.rows[str(HOME / "Extra")].get_subtitle())
+for e in exp:
+    e.set_expanded(True)
 big = [p for p, r in wiz.rows.items() if "calculating" in r.get_subtitle()]
 assert not big or pump(lambda: not any("calculating" in wiz.rows[p].get_subtitle() for p in big))
 wiz.time_row.set_selected(9)
@@ -314,6 +334,7 @@ assert cfgc[1] == "my-laptop" and cfgc[3] == "09:00" and cfgc[4] == []
 chosen = [c["path"] for c in cfgc[2]]
 assert str(HOME / "Extra") in chosen and str(HOME / ".ssh") in chosen, chosen
 assert [c for c in cfgc[2] if c["path"] == str(HOME / ".ssh")][0]["secret"] is True
+assert str(HOME / "Pictures") not in chosen and ("ignore", ["pictures"]) in calls, calls  # ignored: not backed up, remembered
 assert ("timer",) in calls
 order = [c[0] for c in calls]
 assert order.index("make_remotes") < order.index("config") < order.index("timer") < order.index("run_backup")
@@ -1248,7 +1269,7 @@ def run_broadway(env, script, expect):
     if not shutil.which("gtk4-broadwayd"):
         pytest.skip("gtk4-broadwayd not available")
     home = env / "home"
-    for d in ("Documents", "Pictures", ".ssh", "Extra"):
+    for d in ("Documents", "Pictures", ".ssh", "Extra", ".claude", ".cache", ".config/inkscape"):
         (home / d).mkdir(parents=True)
         (home / d / "f.txt").write_text("x")
     bw = subprocess.Popen(["gtk4-broadwayd", BROADWAY], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)

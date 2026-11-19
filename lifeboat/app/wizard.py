@@ -8,8 +8,9 @@ gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
 from gi.repository import Adw, Gio, GLib, Gtk  # noqa: E402
 
-from lifeboat import APP_ID, setup  # noqa: E402
+from lifeboat import APP_ID, found, setup  # noqa: E402
 from lifeboat.app.flow import AccountDialog, install_timer, pill, vbox  # noqa: E402
+from lifeboat.app.found import FoundList  # noqa: E402
 from lifeboat.app.widgets import ago, copy_text, spinner  # noqa: E402
 from lifeboat.app.wizard_state import (  # noqa: E402
     DEFAULT_TIME,
@@ -36,6 +37,7 @@ class SetupWizard(AccountDialog):
         self._nfolders = 0
         self.choices = Choices([])
         self.rows: dict[str, Adw.SwitchRow] = {}
+        self.sizes: dict[str, str] = {}
         self.group_folders = None
         self.device = setup.default_device_name()
         self.daily_at = DEFAULT_TIME
@@ -107,23 +109,19 @@ class SetupWizard(AccountDialog):
         suggested = setup.suggest_folders()
         self.choices = Choices(suggested)
         self.rows = {}
+        self.sizes = {}
         pg = Adw.PreferencesPage()
-        self.group_folders = Adw.PreferencesGroup(title="Folders")
+        self.found = FoundList(suggested, self._suggested_row, lambda f: self._ignored(f, True), lambda f: self._ignored(f, False),
+                               self._start_measure)
+        for g in self.found.groups:
+            pg.add(g)
+        self.group_folders = Adw.PreferencesGroup(title="Added folders", visible=False)  # shown once a folder is added
         self._nfolders = 0
-        for f in suggested:
-            if not f["secret"]:
-                self._folder_row(f, self.group_folders)
-        self.group_folders.set_visible(self._nfolders > 0)  # shown again once a folder is added
         pg.add(self.group_folders)
-        keys = [f for f in suggested if f["secret"]]
-        if keys:
-            gk = Adw.PreferencesGroup(title="Keys", description="Always encrypted")
-            for f in keys:
-                self._folder_row(f, gk, measure=False)
-            pg.add(gk)
         ga = Adw.PreferencesGroup()
         ga.add(self._add_folder_row())
         pg.add(ga)
+        pg.add(self.found.ignored_group)
         gd = Adw.PreferencesGroup(title="This Laptop")
         self.group_device = gd
         self.name_row = Adw.EntryRow(title="Device name", text=self.device)
@@ -141,22 +139,29 @@ class SetupWizard(AccountDialog):
         self._validate()
         return page
 
-    def _folder_row(self, f, group, measure=True, removable=False):
-        row = Adw.SwitchRow(title=f["label"], subtitle=f"{tilde(f['path'])} · {fmt_size(None, False)}" if measure else tilde(f["path"]),
-                            active=self.choices.is_on(f["path"]))
+    def _ignored(self, f, on):
+        (self.choices.ignore if on else self.choices.unignore)(f["path"])
+        self._validate()
+
+    def _suggested_row(self, f):
+        return self._make_row(f, measure=not f["secret"])
+
+    def _start_measure(self, f):
+        if not f["secret"]:
+            self._measure(f)
+
+    def _make_row(self, f, measure=True, removable=False):
+        sub = tilde(f["path"])
+        if measure:
+            sub = f"{sub} · {self.sizes.get(f['path']) or fmt_size(None, False)}"
+        row = Adw.SwitchRow(title=f["label"], subtitle=sub, active=self.choices.is_on(f["path"]), use_markup=False)
         row.connect("notify::active", lambda r, _p, p=f["path"]: self._toggled(p, r.get_active()))
         if removable:
             rm = Gtk.Button(icon_name="user-trash-symbolic", valign=Gtk.Align.CENTER, css_classes=["flat"],
                             tooltip_text="Remove this folder")
-            rm.connect("clicked", lambda *_: self._remove_folder(f["path"], row, group))
+            rm.connect("clicked", lambda *_: self._remove_folder(f["path"], row, self.group_folders))
             row.add_suffix(rm)
         self.rows[f["path"]] = row
-        group.add(row)
-        if group is self.group_folders:
-            self._nfolders += 1
-            group.set_visible(True)
-        if measure:
-            self._measure(f)
         return row
 
     def _toggled(self, path, on):
@@ -177,7 +182,8 @@ class SetupWizard(AccountDialog):
             if self.dead or row is None:
                 return
             self.choices.set_size(path, size, complete)
-            row.set_subtitle(f"{tilde(path)} · {self.choices.hint(path) or fmt_size(size, complete)}")
+            self.sizes[path] = self.choices.hint(path) or fmt_size(size, complete)
+            row.set_subtitle(f"{tilde(path)} · {self.sizes[path]}")
             if row.get_active() != self.choices.is_on(path):
                 self._silent = True  # a size-driven change must not count as a user toggle
                 row.set_active(self.choices.is_on(path))
@@ -207,7 +213,10 @@ class SetupWizard(AccountDialog):
                 return  # dismissed
             if path and self.choices.add(path):
                 f = next(x for x in self.choices.selected() if x["path"] == path)
-                self._folder_row(f, self.group_folders, removable=True)
+                self.group_folders.add(self._make_row(f, removable=True))
+                self._nfolders += 1
+                self._start_measure(f)
+                self.group_folders.set_visible(True)
                 self._validate()
 
         dlg.select_folder(self.win, None, done)
@@ -315,6 +324,7 @@ class SetupWizard(AccountDialog):
         self.push(page)
         token, passphrase = self.token, self.passphrase
         device, choices, daily_at = self.device, self.choices.selected(), self.daily_at
+        ignored = self.choices.ignored_keys()  # kept in memory until the config exists
         existing = [m["device"] for m in self.existing]
 
         def work():
@@ -326,6 +336,7 @@ class SetupWizard(AccountDialog):
                               "no Lifeboat config was."), None
             try:
                 setup.write_wizard_config(cfg_file, device, choices, daily_at, existing_devices=existing)
+                found.apply_ignore(cfg_file, ignored)
                 cfg = load_config(cfg_file)
             except (setup.SetupError, ConfigError, OSError) as e:
                 return None, (f"Could not write the Lifeboat config: {e}. Your backup remotes were created and kept, "

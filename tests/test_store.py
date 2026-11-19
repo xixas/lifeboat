@@ -204,7 +204,7 @@ def test_daily_push_with_skillshare_when_no_lifeboat_token(source, tmp_path):
 def test_daily_push_with_lifeboat_token_uses_git_push(source, tmp_path, monkeypatch):
     (source / "a.md").write_text("# fine\n")
     pushed = []
-    monkeypatch.setattr(store.github, "push", lambda path, token: pushed.append((str(path), token)) or {"ok": True, "error": ""})
+    monkeypatch.setattr(store.github, "push", lambda path, token, **kw: pushed.append((str(path), token)) or {"ok": True, "error": ""})
     log = tmp_path / "ss.log"
     r = store.run_daily(_cfg(source), gh=Token(), binary=_skillshare_push(tmp_path, log))
     assert r["ok"] and r["pushed"] and not log.exists()
@@ -392,3 +392,24 @@ def test_a_different_pick_than_the_existing_skillshare_source_is_refused(tmp_pat
     _skillshare_config(tmp_path, monkeypatch, tmp_path / "other")
     r = store.prepare(_repo(tmp_path / "picked"), binary=p)
     assert r["ok"] is False and f"skillshare already uses {tmp_path / 'other'}" in r["error"] and not log.exists()
+
+
+def test_a_new_store_with_no_upstream_is_pushed_with_dash_u_on_the_first_run(tmp_path, monkeypatch):
+    """A fresh repo and a remote with no refs: ahead is 0 because there is no upstream, but nothing is on GitHub yet."""
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+    bare = tmp_path / "remote.git"
+    _git(tmp_path, "init", "-q", "--bare", "-b", "main", str(bare))
+    src = tmp_path / "src"
+    src.mkdir()
+    _git(src, "init", "-q", "-b", "main")
+    (src / "skills.md").write_text("# s\n")
+    _git(src, "add", "-A")
+    _git(src, "commit", "-qm", "first")
+    _git(src, "remote", "add", "origin", str(bare))
+    assert store.git_state(src)["ahead"] == 0
+    r = store.run_daily(_cfg(src), gh=Token())
+    assert r["ok"] and r["pushed"], r
+    assert _git(bare, "rev-list", "--count", "main").strip() == "1"
+    assert _git(src, "rev-parse", "--abbrev-ref", "@{u}").strip() == "origin/main"
+    again = store.run_daily(_cfg(src), gh=Token())
+    assert again["ok"] and not again["pushed"]

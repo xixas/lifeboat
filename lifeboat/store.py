@@ -112,14 +112,21 @@ def _record(result: dict) -> dict:
     return result
 
 
-def _push(repo: Path, gh, binary) -> dict:
+def _push(repo: Path, gh, binary, first_branch: str | None = None) -> dict:
     """Push with Lifeboat's own GitHub token when it has one, else with `skillshare push` (never `sync`)."""
     if token := gh.token():
         if (git_state(repo)["dirty_count"]):
             for args in (["add", "-A"], ["-c", "user.name=Lifeboat", "-c", "user.email=lifeboat@localhost", "commit", "-qm", "Update skills"]):
                 if _git(repo, *args) is None:
                     return {"ok": False, "error": "could not commit the changes"}
-        return github.push(repo, token)
+        return github.push(repo, token, set_upstream=first_branch)
+    if first_branch:  # skillshare push has no upstream to push to yet
+        try:
+            r = subprocess.run(["git", "-C", str(repo), "push", "-u", "origin", first_branch], capture_output=True, text=True, timeout=180,
+                               check=False, env=dict(os.environ, GIT_TERMINAL_PROMPT="0"))
+        except (OSError, subprocess.TimeoutExpired) as e:
+            return {"ok": False, "error": str(e)}
+        return {"ok": r.returncode == 0, "error": "" if r.returncode == 0 else (r.stderr or r.stdout).strip()[-500:]}
     binary = binary or store_install.skillshare_path() or shutil.which("skillshare")
     if not binary:
         return {"ok": False, "error": "skillshare is not installed and Lifeboat is not signed in to GitHub"}
@@ -150,10 +157,11 @@ def run_daily(cfg: Config, gh=None, binary: Path | str | None = None) -> dict | 
         out = _git(repo, "rev-parse", "--abbrev-ref", "@{u}")
         result["repo"], result["upstream"] = str(repo), (out or "").strip() or None
         return _record(result)
-    if not before["dirty_count"] and not before["ahead"]:
+    first = before["branch"] if before["remote_url"] and before["last_commit_time"] and not _upstream(repo) else None  # never pushed yet
+    if not before["dirty_count"] and not before["ahead"] and not first:
         result["ok"] = True
         return _record(result)
-    out = _push(repo, gh or github.GitHub(), binary)
+    out = _push(repo, gh or github.GitHub(), binary, first)
     result.update(ok=out["ok"], pushed=out["ok"], error=out["error"])
     return _record(result)
 

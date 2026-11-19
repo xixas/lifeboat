@@ -165,9 +165,9 @@ class GitHub:
                 for i in installs for r in self._get(f"/user/installations/{i['id']}/repositories").get("repositories", [])]
 
 
-def push(repo_path, token: str, timeout: int = 120) -> dict:
+def push(repo_path, token: str, timeout: int = 120, set_upstream: str | None = None) -> dict:
     """`git push` with the token supplied to this one process through its environment: never argv, never any git config."""
-    argv = ["git", "-C", str(repo_path), "-c", "credential.helper=", "-c", f"credential.helper={HELPER}", "push"]
+    argv = ["git", "-C", str(repo_path), "-c", "credential.helper=", "-c", f"credential.helper={HELPER}", "push", *(["-u", "origin", set_upstream] if set_upstream else [])]
     try:
         r = subprocess.run(argv, env={**os.environ, "LIFEBOAT_GH_TOKEN": token, "GIT_TERMINAL_PROMPT": "0"}, capture_output=True, text=True, timeout=timeout, check=False)
     except (OSError, subprocess.TimeoutExpired) as e:

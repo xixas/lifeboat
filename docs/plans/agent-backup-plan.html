@@ -1,0 +1,264 @@
+<!doctype html>
+<html lang="en" data-theme="light" data-lavish-annotate="on">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/daisyui@5.5.19/daisyui.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/daisyui@5.5.19/themes.css">
+<script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4.2.4/dist/index.global.js"></script>
+<style>
+  *, *::before, *::after { box-sizing: border-box; }
+  :where(.grid, .flex) > * { min-width: 0; }
+  :where(p, li, td, th, .badge) { overflow-wrap: anywhere; }
+  body { background: #f7f7f5; }
+  code { font-size: .85em; background: #ecebe7; padding: .05em .35em; border-radius: .3em; }
+  /* libadwaita-dark mock surface */
+  .adw { background: #242428; color: #eee; border-radius: 14px; font-family: Cantarell, "Inter", system-ui, sans-serif; box-shadow: 0 10px 30px rgba(0,0,0,.25); }
+  .adw .hb { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; padding: 10px 12px; border-bottom: 1px solid #ffffff14; }
+  .adw .title { text-align: center; font-weight: 700; font-size: 14px; }
+  .adw .sub { text-align: center; font-size: 12px; color: #ffffffa0; }
+  .adw .xbtn { justify-self: end; width: 26px; height: 26px; border-radius: 50%; background: #ffffff1a; display: grid; place-items: center; font-size: 12px; }
+  .adw .tbtn { justify-self: start; font-size: 12px; padding: 4px 10px; border-radius: 6px; background: #ffffff1a; }
+  .adw .tbtn.on { background: #ffffff33; }
+  .adw .body { padding: 18px; }
+  .adw .boxed { background: #ffffff0d; border-radius: 12px; overflow: hidden; }
+  .adw .row { display: flex; align-items: center; gap: 12px; padding: 11px 14px; border-bottom: 1px solid #00000040; }
+  .adw .row:last-child { border-bottom: 0; }
+  .adw .row .t { font-size: 14px; }
+  .adw .row .s { font-size: 12px; color: #ffffff90; }
+  .adw .ok { color: #8ff0a4; } .adw .warn { color: #f8e45c; } .adw .err { color: #ff7b63; }
+  .adw .mono { font-family: "Source Code Pro", ui-monospace, monospace; font-size: 11.5px; line-height: 1.5; color: #ddd; white-space: pre-wrap; }
+  .adw .summary { text-align: center; margin-bottom: 14px; }
+  .adw .summary .big { font-size: 20px; font-weight: 800; }
+  .spin { width: 16px; height: 16px; border: 2px solid #ffffff40; border-top-color: #fff; border-radius: 50%; animation: s 1s linear infinite; }
+  @keyframes s { to { transform: rotate(360deg); } }
+</style>
+<title>Lifeboat: AI assistant backup</title>
+<script type="application/json" data-lavish-revisions>
+[{ "id": "r1", "label": "Round 1", "timestamp": "2026-11-19T12:30:00+05:30", "summary": "Found-on-this-laptop screen with groups and Ignore; GitHub config store you can share" },
+ { "id": "r2", "label": "Round 2", "timestamp": "2026-11-19T12:45:00+05:30", "summary": "Store layer uses skillshare instead of custom code" },
+ { "id": "r3", "label": "Round 3", "timestamp": "2026-11-19T13:00:00+05:30", "summary": "skillshare UI, repo connection and naming; coverage-drop alert" },
+ { "id": "r4", "label": "Round 4", "timestamp": "2026-11-19T13:15:00+05:30", "summary": "GitHub for setup, Drive for files and secrets; skillshare v0.30.11; Ignore button" }]
+</script>
+<style>
+  .flow text { font-family: system-ui, sans-serif; }
+  details > summary { cursor: pointer; font-weight: 700; }
+  .adw .chip { font-size: 11px; padding: 2px 8px; border-radius: 99px; background: #ffffff1a; color: #ffffffc0; white-space: nowrap; }
+  .adw .chip.lock { background: #3a7f5a55; color: #8ff0a4; }
+  .adw .chip.git { background: #78aeed33; color: #a8cdf5; }
+  .adw .tog { width: 34px; height: 20px; border-radius: 99px; background: #3584e4; position: relative; flex: none; }
+  .adw .tog::after { content: ""; position: absolute; right: 2px; top: 2px; width: 16px; height: 16px; border-radius: 50%; background: #fff; }
+  .adw .tog.off { background: #ffffff30; } .adw .tog.off::after { right: auto; left: 2px; }
+  .adw .more { color: #ffffff80; font-size: 16px; padding: 0 4px; }
+  .adw .gh { font-size: 12px; color: #ffffff90; text-transform: uppercase; letter-spacing: .04em; margin: 4px 2px 6px; display: flex; justify-content: space-between; }
+  .adw .menu { position: absolute; right: 10px; top: 34px; background: #38383d; border-radius: 10px; padding: 6px; box-shadow: 0 6px 18px #0008; font-size: 13px; z-index: 2; }
+  .adw .menu div { padding: 6px 12px; border-radius: 6px; } .adw .menu div.hl { background: #ffffff14; }
+  .adw .btn { font-size: 13px; padding: 7px 14px; border-radius: 8px; background: #ffffff1a; display: inline-block; }
+  .adw .btn.blue { background: #3584e4; color: #fff; font-weight: 700; }
+</style>
+</head>
+<body class="text-base-content">
+<main class="max-w-5xl mx-auto px-4 sm:px-8 py-10 space-y-10">
+
+<header class="space-y-2">
+  <div class="flex flex-wrap gap-2">
+    <span class="badge badge-soft badge-info">Plan, no code yet</span>
+    <span class="badge badge-soft badge-info">Reviewed by Fable</span>
+    <span class="badge badge-soft">2026-11-19</span>
+  </div>
+  <h1 class="text-3xl sm:text-4xl font-black">Find everything, back it up, share your setup</h1>
+  <p class="text-lg">Lifeboat scans the laptop, shows what it found in groups, and the user picks. Everything goes to Drive, encrypted. Your AI setup also goes to a GitHub repo you can share.</p>
+</header>
+
+<!-- DIAGRAM -->
+<section class="space-y-3" data-lavish-revision="r1">
+  <h2 class="text-2xl font-bold">How it works</h2>
+  <div class="rounded-box border border-base-content/10 bg-base-100 p-4 overflow-x-auto">
+  <svg class="flow" viewBox="0 0 960 360" width="100%" style="min-width:720px" role="img" aria-label="Backup and store flow">
+    <defs><marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0L10,5L0,10z" fill="#666"/></marker></defs>
+    <rect x="10" y="30" width="250" height="290" rx="14" fill="#eef3fb" stroke="#78aeed"/>
+    <text x="25" y="56" font-weight="700" font-size="15">1 · Scan this laptop</text>
+    <g font-size="13">
+      <text x="25" y="86">AI assistants</text><text x="245" y="86" text-anchor="end" fill="#666">12</text>
+      <text x="25" y="112">Shell &amp; terminal</text><text x="245" y="112" text-anchor="end" fill="#666">7</text>
+      <text x="25" y="138">Git &amp; dev tools</text><text x="245" y="138" text-anchor="end" fill="#666">6</text>
+      <text x="25" y="164">Editors</text><text x="245" y="164" text-anchor="end" fill="#666">2</text>
+      <text x="25" y="190">Desktop</text><text x="245" y="190" text-anchor="end" fill="#666">4</text>
+      <text x="25" y="216">Keys &amp; logins 🔒</text><text x="245" y="216" text-anchor="end" fill="#666">6</text>
+      <text x="25" y="242">Documents, Pictures…</text><text x="245" y="242" text-anchor="end" fill="#666">5</text>
+      <line x1="25" y1="256" x2="245" y2="256" stroke="#ccd"/>
+      <text x="25" y="278" fill="#888">Skipped: caches, browsers,</text>
+      <text x="25" y="296" fill="#888">games, chat apps (shown, not on)</text>
+    </g>
+    <line x1="262" y1="175" x2="320" y2="175" stroke="#666" stroke-width="2" marker-end="url(#a)"/>
+    <rect x="325" y="110" width="190" height="130" rx="14" fill="#f3f0fb" stroke="#9b7fd4"/>
+    <text x="340" y="138" font-weight="700" font-size="15">2 · You choose</text>
+    <text x="340" y="164" font-size="13">Toggle each item</text>
+    <text x="340" y="186" font-size="13">"Ignore" hides it for good</text>
+    <text x="340" y="208" font-size="13">Daily run at 13:00</text>
+    <path d="M517,150 C560,150 560,80 600,80" fill="none" stroke="#666" stroke-width="2" marker-end="url(#a)"/>
+    <path d="M517,200 C560,200 560,270 600,270" fill="none" stroke="#666" stroke-width="2" marker-end="url(#a)"/>
+    <rect x="605" y="20" width="340" height="120" rx="14" fill="#eaf6ee" stroke="#4caf6e"/>
+    <text x="620" y="46" font-weight="700" font-size="15">3a · Backup · Google Drive 🔒</text>
+    <text x="620" y="72" font-size="13">Everything you picked, encrypted</text>
+    <text x="620" y="94" font-size="13">Old versions kept 90 days</text>
+    <text x="620" y="116" font-size="13" fill="#666">For: getting a lost laptop back</text>
+    <rect x="605" y="210" width="340" height="130" rx="14" fill="#fff8e1" stroke="#e0b400"/>
+    <text x="620" y="236" font-weight="700" font-size="15">3b · Config store · your GitHub</text>
+    <text x="620" y="262" font-size="13">Skills, instructions, hooks, shell setup</text>
+    <text x="620" y="284" font-size="13">Never secrets: checked before every push</text>
+    <text x="620" y="306" font-size="13">Full history; share the link</text>
+    <text x="620" y="328" font-size="13" fill="#666">For: sharing and a second machine</text>
+  </svg>
+  </div>
+</section>
+
+<!-- SCREEN 1: FOUND -->
+<section class="space-y-3" data-lavish-revision="r1">
+  <h2 class="text-2xl font-bold">Screen 1 · Found on this laptop</h2>
+  <p class="opacity-70">Real items from your laptop. Wizard on first run; the same page later under <b>Backups</b>.</p>
+  <div class="grid lg:grid-cols-[3fr_2fr] gap-6 items-start">
+    <div class="adw">
+      <div class="hb"><span class="tbtn">Back</span><div><div class="title">Found on This Laptop</div><div class="sub">42 items · 27 on · 3 ignored</div></div><span class="xbtn">✕</span></div>
+      <div class="body space-y-4">
+        <div>
+          <div class="gh"><span>AI assistants · 12</span><span class="chip lock">encrypted</span></div>
+          <div class="boxed">
+            <div class="row"><div class="flex-1"><div class="t">Claude Code</div><div class="s">~/.claude, ~/.claude.json · skills, memory, hooks</div></div><span class="chip git">→ store</span><span class="tog"></span><span class="more">⋯</span></div>
+            <div class="row"><div class="flex-1"><div class="t">Codex</div><div class="s">~/.codex · AGENTS.md, skills</div></div><span class="chip git">→ store</span><span class="tog"></span><span class="more">⋯</span></div>
+            <div class="row"><div class="flex-1"><div class="t">Gemini CLI · Cursor · Cline · Continue</div><div class="s">4 more, same treatment</div></div><span class="tog"></span><span class="more">⋯</span></div>
+            <div class="row"><div class="flex-1"><div class="t">Roo · Kiro · Qwen · OpenCode · Goose · Copilot</div><div class="s">6 more</div></div><span class="btn" style="padding:3px 10px;font-size:12px">Ignore</span><span class="tog"></span></div>
+          </div>
+        </div>
+        <div>
+          <div class="gh"><span>Shell &amp; terminal · 7</span></div>
+          <div class="boxed">
+            <div class="row"><div class="flex-1"><div class="t">zsh</div><div class="s">.zshrc, .zshenv, .p10k.zsh, ~/.config/zsh</div></div><span class="chip git">→ store</span><span class="tog"></span><span class="more">⋯</span></div>
+            <div class="row"><div class="flex-1"><div class="t">kitty · wezterm · tmux · atuin</div><div class="s">4 more</div></div><span class="tog"></span><span class="more">⋯</span></div>
+          </div>
+        </div>
+        <div>
+          <div class="gh"><span>Keys &amp; logins · 6</span><span class="chip lock">encrypted · never in store</span></div>
+          <div class="boxed">
+            <div class="row"><div class="flex-1"><div class="t">SSH · GPG · AWS · Azure · gh · .npmrc</div><div class="s">~/.ssh, ~/.gnupg, ~/.aws, ~/.azure, ~/.config/gh, ~/.npmrc</div></div><span class="tog"></span><span class="more">⋯</span></div>
+          </div>
+        </div>
+        <div>
+          <div class="gh"><span>Not backed up · rebuildable or huge</span></div>
+          <div class="boxed">
+            <div class="row"><div class="flex-1"><div class="t">Browsers, caches, Slack, Discord, Steam</div><div class="s">google-chrome, BraveSoftware, ~/.cache, …</div></div><span class="tog off"></span><span class="more">⋯</span></div>
+          </div>
+        </div>
+        <div class="gh"><span>Ignored · 3</span><span style="color:#78aeed">Show</span></div>
+      </div>
+    </div>
+    <ul class="space-y-3 list-disc pl-5">
+      <li><b>Groups</b> come from one catalogue of known apps. Unknown folders in <code>~/.config</code> land in <b>Other app settings</b>, off by default.</li>
+      <li><b>Ignore</b> (on hover) moves an item to the Ignored list. The next scan won't ask again.</li>
+      <li><b>→ store</b> marks what also goes to the GitHub config store.</li>
+      <li><b>Keys &amp; logins</b> are encrypted on Drive and blocked from the store.</li>
+      <li>New things found later show up on Overview: "2 new items found · Review".</li>
+    </ul>
+  </div>
+</section>
+
+<!-- SCREEN 2: STORE -->
+<section class="space-y-3" data-lavish-revision="r1">
+  <h2 class="text-2xl font-bold">Screen 2 · Config store (GitHub), powered by skillshare</h2>
+  <div class="alert alert-info alert-soft" data-lavish-revision="r2"><span><b>Use skillshare for this layer, don't build it.</b> It already is this store: one git-tracked source folder (<code>~/.config/skillshare</code>) for skills, agents, rules, MCP and hooks, synced into Claude, Codex and 40+ tools, with a security audit and a Linux desktop app. MIT, Go, 3.2k stars. Lifeboat detects it, shows its status on this page, and backs its source up to Drive. If it isn't installed, <b>Set up skillshare</b> installs a pinned version.</span></div>
+  <div class="overflow-x-auto rounded-box border border-base-content/10 bg-base-100" data-lavish-revision="r3">
+    <table class="table table-sm">
+      <thead><tr><th>Your question</th><th>Answer</th></tr></thead>
+      <tbody>
+        <tr><td>Still get skillshare's own UI?</td><td><b>Yes.</b> Config Store has <b>Open skillshare</b>, which opens its web dashboard (<code>skillshare ui</code>) or the desktop app. Lifeboat shows status; skillshare stays the place to edit.</td></tr>
+        <tr><td>Where are repos connected?</td><td>On Config Store, step a: sign in to GitHub, then pick <b>New repo</b> or <b>Use a repo I have</b>. Lifeboat sets that repo as the remote of skillshare's source folder. (How skillshare sets a remote: unverified, check in 0.6.)</td></tr>
+        <tr><td>Default repo name</td><td><code>you/skillshare-source</code>, after skillshare's own term "source". Private by default.</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="grid lg:grid-cols-3 gap-5 items-start">
+    <div class="space-y-2">
+      <div class="font-semibold">a · Connect (new user)</div>
+      <div class="adw"><div class="hb"><span></span><div><div class="title">Config Store</div></div><span class="xbtn">✕</span></div>
+        <div class="body space-y-3 text-center">
+          <div class="t" style="font-size:15px;font-weight:700">Keep your setup on GitHub</div>
+          <div class="s" style="font-size:12px;color:#ffffffa0">History of every change, and a link to share. Secrets never leave the laptop.</div>
+          <div class="btn blue">Sign in with GitHub</div>
+          <div class="s" style="font-size:12px;color:#ffffffa0">Code: <b style="color:#fff">K7QF-2M9D</b> · enter at github.com/login/device</div>
+          <div class="boxed text-left"><div class="row"><div class="flex-1"><div class="t">New private repo</div><div class="s">you/skillshare-source</div></div><span class="ok">●</span></div><div class="row"><div class="flex-1"><div class="t">Use a repo I have</div></div><span class="more">○</span></div></div>
+        </div></div>
+    </div>
+    <div class="space-y-2">
+      <div class="font-semibold">b · Synced (your laptop)</div>
+      <div class="adw"><div class="hb"><span></span><div><div class="title">Config Store</div><div class="sub">xixas/claude-config · private</div></div><span class="xbtn">✕</span></div>
+        <div class="body space-y-3">
+          <div class="boxed">
+            <div class="row"><span class="ok">✓</span><div class="flex-1"><div class="t">In sync</div><div class="s">Pushed today 13:02 · 3 files changed</div></div></div>
+            <div class="row"><span class="ok">✓</span><div class="flex-1"><div class="t">Secret check passed</div><div class="s">2 files kept out: settings.local.json, .npmrc</div></div></div>
+          </div>
+          <div class="gh"><span>What's in it</span></div>
+          <div class="boxed">
+            <div class="row"><div class="flex-1"><div class="t">Skills</div></div><span class="s">40</span></div>
+            <div class="row"><div class="flex-1"><div class="t">Instructions · hooks · output styles</div></div><span class="s">12</span></div>
+            <div class="row"><div class="flex-1"><div class="t">Shell setup</div><div class="s">.zshrc, .p10k.zsh, .gitconfig</div></div><span class="s">5</span></div>
+          </div>
+        </div></div>
+    </div>
+    <div class="space-y-2">
+      <div class="font-semibold">c · Share</div>
+      <div class="adw"><div class="hb"><span></span><div><div class="title">Share Skills</div></div><span class="xbtn">✕</span></div>
+        <div class="body space-y-3">
+          <div class="boxed">
+            <div class="row"><span class="tog"></span><div class="flex-1"><div class="t">grilling</div></div></div>
+            <div class="row"><span class="tog"></span><div class="flex-1"><div class="t">diagnosing-bugs</div></div></div>
+            <div class="row"><span class="tog off"></span><div class="flex-1"><div class="t">pinestem-audit</div><div class="s">mentions client names · kept private</div></div></div>
+          </div>
+          <div class="boxed"><div class="row"><div class="flex-1"><div class="t">Public repo</div><div class="s">you/skills · install with npx skills add you/skills</div></div></div></div>
+          <div class="text-center"><span class="btn blue">Publish 2 Skills</span></div>
+        </div></div>
+    </div>
+  </div>
+</section>
+
+<!-- DECISIONS -->
+<section class="space-y-3">
+  <h2 class="text-2xl font-bold">Decisions</h2>
+  <div class="overflow-x-auto rounded-box border border-base-content/10 bg-base-100">
+    <table class="table">
+      <thead><tr><th>Question</th><th>Proposed</th><th>Why</th></tr></thead>
+      <tbody data-lavish-revision="r1">
+        <tr data-lavish-revision="r4"><td>What goes where</td><td><b>GitHub (via skillshare):</b> skills, agents, rules, hooks, MCP · <b>Drive:</b> files and secrets</td><td>Shareable setup gets git history; secrets and personal files never touch GitHub</td></tr>
+        <tr data-lavish-revision="r3"><td>Alerts</td><td><b>Also alert when coverage drops</b></td><td>Today it alerts on failed or stale runs only. Removing jobs on 2 Nov raised nothing, because nothing failed</td></tr>
+        <tr data-lavish-revision="r2"><td>Store engine</td><td><b>skillshare v0.30.11</b>, pinned</td><td>Your call; it is 2 days old, so the pin is bumped deliberately</td></tr>
+        <tr><td>Store sign-in</td><td><b>GitHub device code</b>, like <code>gh auth login</code></td><td>No pasted tokens</td></tr>
+        <tr><td>Store repo</td><td><b>New private repo</b>, or adopt one you have</td><td>Yours: <code>xixas/claude-config</code>, found from the skill links</td></tr>
+        <tr><td>Sharing</td><td><b>Per skill, into a separate public repo</b></td><td>The store stays private; one wrong toggle can't leak everything</td></tr>
+        <tr><td>Chat history · logins</td><td><b>Off · never</b></td><td>1.2 GB of client conversations · re-login takes a minute</td></tr>
+        <tr><td>Existing tools</td><td><b>Borrow their catalogues</b></td><td>chezmoi gist, asb, skillshare, npx skills: all still need a backup</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section class="space-y-3">
+  <details class="rounded-box border border-base-content/10 bg-base-100 p-4">
+    <summary>Risks (4)</summary>
+    <ul class="list-disc pl-5 mt-3 space-y-1">
+      <li><b>A secret reaches GitHub.</b> Store takes only known-safe file types, and a gitleaks-style scan blocks the push. Keys &amp; logins group is never eligible.</li>
+      <li><b>Store edits from two laptops clash.</b> Version 1 is one-way (laptop → GitHub). Pulling onto a second laptop comes later.</li>
+      <li><b>Links on Drive.</b> rclone keeps symlinks as <code>.rclonelink</code> files; untested on the encrypted remote. First thing to test.</li>
+      <li><b>Catalogue goes stale.</b> Unknown folders still appear under "Other app settings", so nothing is hidden.</li>
+    </ul>
+  </details>
+  <details class="rounded-box border border-base-content/10 bg-base-100 p-4">
+    <summary>Build order (2 releases)</summary>
+    <ol class="list-decimal pl-5 mt-3 space-y-1" data-lavish-revision="r2">
+      <li><b>0.5 Find:</b> catalogue + scan, Found screen with groups and Ignore, AI folders on Drive with <code>--links</code>, Overview "new items found", and an alert when something that was backed up no longer is</li>
+      <li><b>0.6 Store:</b> detect or install skillshare, Config Store page showing its source repo and sync state, back up <code>~/.config/skillshare</code> to Drive. Sharing comes from skillshare itself.</li>
+    </ol>
+  </details>
+</section>
+
+</main>
+</body>
+</html>

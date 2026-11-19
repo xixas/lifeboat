@@ -15,6 +15,7 @@ import textwrap
 import threading
 import time
 import weakref
+from dataclasses import replace
 from pathlib import Path
 
 from lifeboat import catalogue, engine
@@ -446,7 +447,18 @@ def home_files_job(device: str, paths: list[str]) -> Job:
 
 def wizard_jobs(device: str, choices: list[dict]) -> list[Job]:
     """The jobs for everything chosen: one per folder, plus one `home-files` job for all the single files."""
-    jobs = [wizard_job(device, c) for c in choices if c.get("kind", "dir") == "dir"]
+    jobs, names, dests = [], set(), set()
+    for c in choices:
+        if c.get("kind", "dir") != "dir":
+            continue
+        job, n = wizard_job(device, c), 1
+        name, dest = job.name, job.dest
+        while name in names or dest.lower() in dests:  # two folders called "skills": suffix -2, -3 ...
+            n += 1
+            name, dest = f"{job.name}-{n}", f"{job.dest}-{n}"
+        names.add(name)
+        dests.add(dest.lower())
+        jobs.append(replace(job, name=name, dest=dest))
     files = [c["path"] for c in choices if c.get("kind") == "file"]
     return jobs + ([home_files_job(device, files)] if files else [])
 

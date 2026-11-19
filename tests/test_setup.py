@@ -486,8 +486,7 @@ def test_write_wizard_config_refuses_to_overwrite(wiz, fake_home):
 
 @pytest.mark.parametrize("device,choices,daily", [("bad name", [folder("p", "P", "/x")], "13:00"),
                                                   ("d", [folder("p", "P", "/x")], "25:00"),
-                                                  ("d", [], "13:00"),
-                                                  ("d", [folder("p", "P", "/x"), folder("p2", "P", "/y")], "13:00")])
+                                                  ("d", [], "13:00")])
 def test_write_wizard_config_validates_before_writing(wiz, device, choices, daily):
     with pytest.raises(config.ConfigError):
         setup.write_wizard_config(wiz, device, choices, daily)
@@ -851,3 +850,14 @@ def test_a_job_that_would_back_up_the_whole_home_is_refused():
     assert config.parse({"jobs": [{**base, "include": ["/.zshrc"]}]})
     assert config.parse({"jobs": [{**base, "filter_file": "f.txt"}]})
     assert config.parse({"jobs": [{**base, "source": "~/Documents"}]})
+
+
+def test_folders_with_the_same_name_get_unique_job_names_and_destinations(wiz, fake_home):
+    items = [{**folder("linked-p1", "Linked: skills", str(fake_home / "p1" / "skills"), secret=True), "kind": "dir"},
+             {**folder("linked-p2", "Linked: skills", str(fake_home / "p2" / "skills"), secret=True), "kind": "dir"},
+             {**folder("linked-p3", "Linked: skills", str(fake_home / "p3" / "skills"), secret=True), "kind": "dir"}]
+    setup.write_wizard_config(wiz, "laptop", items, "13:00")
+    jobs = config.load_config(wiz).jobs
+    assert [j.name for j in jobs] == ["linked-skills", "linked-skills-2", "linked-skills-3"]
+    assert [j.dest for j in jobs] == ["lifeboat-secure:laptop/linked-skills", "lifeboat-secure:laptop/linked-skills-2",
+                                      "lifeboat-secure:laptop/linked-skills-3"]

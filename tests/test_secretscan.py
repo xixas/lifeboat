@@ -281,3 +281,37 @@ def test_the_hook_goes_where_a_global_core_hookspath_points(repo, tmp_path, monk
 def test_a_relative_hookspath_is_relative_to_the_repo(repo):
     git(repo, "config", "core.hooksPath", ".githooks")
     assert secretscan.install_pre_push_hook(repo) == repo / ".githooks" / "pre-push"
+
+
+# ---------------------------------------------------------------- only a clean scan lets a push through
+def _fake_lifeboat(tmp_path, scan_exit, probe="lifeboat-secret-scan-1"):
+    d = tmp_path / "fake-bin"
+    d.mkdir(exist_ok=True)
+    (d / "lifeboat").write_text(f'#!/bin/sh\nfor a in "$@"; do [ "$a" = --probe ] && {{ echo "{probe}"; exit 0; }}; done\nexit {scan_exit}\n')
+    (d / "lifeboat").chmod(0o755)
+    return dict(os.environ, PATH=os.pathsep.join([str(d), str(_BIN)]), PYTHONPATH="")
+
+
+def _run_hook(repo, env):
+    return subprocess.run([str(install(repo)), "origin", "x"], input="", capture_output=True, text=True, cwd=repo, env=env)
+
+
+@pytest.mark.parametrize("code,allowed", [(0, True), (1, False), (2, False), (3, False), (126, False), (137, False)])
+def test_only_exit_0_from_the_real_scan_allows_the_push(repo, tmp_path, code, allowed):
+    r = _run_hook(repo, _fake_lifeboat(tmp_path, code))
+    assert (r.returncode == 0) is allowed
+
+
+def test_a_lifeboat_without_the_probe_is_treated_as_absent(repo, tmp_path):
+    r = _run_hook(repo, _fake_lifeboat(tmp_path, 2, probe="nope"))  # 0.4.0: no secret-scan subcommand, exits 2
+    assert r.returncode == 0 and "lifeboat" in r.stderr
+
+
+def test_no_lifeboat_on_path_warns_and_allows(repo):
+    r = _run_hook(repo, push_env(on_path=False))
+    assert r.returncode == 0 and "not found" in r.stderr
+
+
+def test_the_probe_flag_prints_the_marker():
+    r = subprocess.run(["lifeboat", "secret-scan", "--probe"], capture_output=True, text=True, env=push_env())
+    assert r.returncode == 0 and r.stdout.strip() == "lifeboat-secret-scan-1"

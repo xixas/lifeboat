@@ -193,16 +193,19 @@ def scan_pre_push(repo, stdin_text: str) -> list[dict]:
     return found
 
 
+PROBE_MARKER = "lifeboat-secret-scan-1"
 HOOK = f"""#!/bin/sh
 {HOOK_MARK}: blocks a push that carries a secret. Edits here are overwritten.
 input=$(cat)
-if command -v lifeboat >/dev/null 2>&1; then
+if command -v lifeboat >/dev/null 2>&1 && [ "$(lifeboat secret-scan --probe 2>/dev/null)" = "{PROBE_MARKER}" ]; then
   printf '%s\\n' "$input" | lifeboat secret-scan --pre-push "$@"
   rc=$?
-  if [ "$rc" -eq 1 ]; then exit 1; fi
-  if [ "$rc" -ne 0 ]; then echo "lifeboat: the secret check could not run (exit $rc); not blocking this push" >&2; fi
+  if [ "$rc" -ne 0 ]; then
+    echo "lifeboat: push blocked (the secret check exited $rc)" >&2
+    exit 1
+  fi
 else
-  echo "lifeboat: not found on PATH, so the secret check was skipped for this push" >&2
+  echo "lifeboat: not found on PATH, or too old to have the secret check; skipped it for this push" >&2
 fi
 chained="$(dirname "$0")/pre-push.lifeboat-chained"
 if [ -x "$chained" ]; then
@@ -234,6 +237,9 @@ def format_findings(found: list[dict]) -> str:
 
 def main(argv: list[str] | None = None) -> int:
     argv = sys.argv[1:] if argv is None else argv
+    if "--probe" in argv:
+        print(PROBE_MARKER)
+        return 0
     if "--pre-push" not in argv:
         print("usage: python3 -m lifeboat.secretscan --pre-push  (reads git's pre-push lines on stdin)", file=sys.stderr)
         return 2

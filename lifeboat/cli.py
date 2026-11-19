@@ -141,7 +141,7 @@ def cmd_ignore(a) -> int:
 
 def cmd_secret_scan(a) -> int:
     from lifeboat import secretscan
-    return secretscan.main(["--pre-push"])
+    return secretscan.main(["--probe"] if a.probe else ["--pre-push"])
 
 
 def cmd_versions(a) -> int:
@@ -324,7 +324,9 @@ def parser() -> argparse.ArgumentParser:
     s.add_argument("--json", action="store_true")
     s.set_defaults(fn=cmd_versions)
     s = sub.add_parser("secret-scan", help="scan what git is about to push for secrets (called by the config store's pre-push hook)")
-    s.add_argument("--pre-push", action="store_true", required=True, help="read git's pre-push lines on stdin")
+    g = s.add_mutually_exclusive_group(required=True)
+    g.add_argument("--pre-push", action="store_true", help="read git's pre-push lines on stdin")
+    g.add_argument("--probe", action="store_true", help="print the marker the pre-push hook looks for, then exit")
     s.add_argument("git_args", nargs="*", help="the remote name and URL git passes to a pre-push hook (ignored)")
     s.set_defaults(fn=cmd_secret_scan)
     s = sub.add_parser("restore", help="copy a job's files into a folder")

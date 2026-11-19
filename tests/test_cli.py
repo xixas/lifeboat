@@ -113,7 +113,7 @@ def test_jobs_json_and_text(env, make_cfg, capsys):
     doc = json.loads(capsys.readouterr().out)
     assert doc["config_path"] == str(cfg.path)
     assert doc["jobs"][0] == {"name": "docs", "source": cfg.jobs[0].source, "dest": cfg.jobs[0].dest, "old": cfg.jobs[0].old,
-                              "exclude": [], "include": [], "filter_file": "", "encrypted": False}
+                              "exclude": [], "include": [], "filter_file": "", "encrypted": False, "links": False}
     assert cli.main(["jobs"]) == 0
     assert f"docs: {cfg.jobs[0].source} -> {cfg.jobs[0].dest}" in capsys.readouterr().out
 

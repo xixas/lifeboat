@@ -188,3 +188,15 @@ def test_example_config_path_falls_back_to_system_install(tmp_path, monkeypatch)
     monkeypatch.setattr(config, "__file__", str(tmp_path / "site-packages" / "lifeboat" / "config.py"))
     monkeypatch.setattr(config, "SYSTEM_EXAMPLE_CONFIG", system)
     assert config.example_config_path() == system
+
+
+def test_links_key_parses_and_renders():
+    from lifeboat.config import Job, add_job_text, render_job_block
+    assert parse({"jobs": [JOB]}).jobs[0].links is False
+    assert parse({"jobs": [{**JOB, "links": True}]}).jobs[0].links is True
+    with pytest.raises(ConfigError, match=r"jobs\[1\].links"):
+        parse({"jobs": [{**JOB, "links": "yes"}]})
+    job = Job("b", "~/b", "r:b", "r:_old", links=True)
+    assert "links = true" in render_job_block(job)
+    assert "links" not in render_job_block(Job("b", "~/b", "r:b", "r:_old"))
+    assert parse(__import__("tomllib").loads(add_job_text(BASE, job))).jobs[1] == job

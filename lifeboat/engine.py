@@ -126,6 +126,8 @@ def stream(argv: list[str], env: dict, log, emit: Emit | None = None, handle: Ca
 def job_args(cfg: Config, job: Job, stamp: str) -> list[str]:
     args = ["sync", os.path.expanduser(job.source), job.dest,
             "--backup-dir", f"{job.old.rstrip('/')}/{stamp}/{job.name}"]
+    if job.links:
+        args.append("--links")  # store symlinks as .rclonelink files instead of following them
     for pat in job.include:
         args += ["--include", pat]
     for pat in job.exclude:
@@ -423,6 +425,8 @@ def restore(cfg: Config, job: Job | str, to_dir: str | os.PathLike, version: str
         raise ConfigError(f"version must look like 2026-01-31_130000, got {version!r}")
     src = job.dest if version is None else f"{job.old.rstrip('/')}/{version}/{job.name}"
     args = ["copy", src, os.path.expanduser(str(to_dir))] + COMMON + JSON_LOG + (["--dry-run"] if dry_run else []) + (["--update"] if keep_newer else [])
+    if job.links:
+        args.append("--links")  # recreate the symlinks stored as .rclonelink files
     tmp = None
     if files:
         tmp = tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False)

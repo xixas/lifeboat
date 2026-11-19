@@ -751,3 +751,20 @@ def test_only_encrypted_jobs_write_the_probe(tmp_path, make_cfg, clock):
     (tmp_path / "src" / "a.txt").write_text("one")
     st = engine.run_backup(cfg, now=clock(0))
     assert st["ok"] and "probe" not in st and not engine.check_probe(cfg.probe)  # an unchecked key never plants a probe
+
+
+@pytest.mark.parametrize("crypt", [False, True], ids=["local", "crypt"])
+def test_links_job_round_trips_symlinks_including_dangling(tmp_path, make_cfg, clock, crypt):
+    cfg = make_cfg(crypt=crypt)
+    cfg.jobs[0].links = True
+    src = tmp_path / "src"
+    (src / "real.txt").write_text("real")
+    os.symlink("real.txt", src / "good")
+    os.symlink("nowhere.txt", src / "dangling")
+    st = engine.run_backup(cfg, now=clock())
+    assert st["ok"] and st["jobs"][0]["rc"] == 0
+    assert engine.restore(cfg, "docs", tmp_path / "back") == 0
+    back = tmp_path / "back"
+    assert (back / "good").is_symlink() and os.readlink(back / "good") == "real.txt"
+    assert (back / "dangling").is_symlink() and os.readlink(back / "dangling") == "nowhere.txt"
+    assert not (back / "good.rclonelink").exists() and read(back / "real.txt") == "real"

@@ -29,6 +29,7 @@ class Job:
     include: list[str] = field(default_factory=list)
     filter_file: str = ""
     encrypted: bool = False
+    links: bool = False
 
 
 @dataclass
@@ -152,6 +153,7 @@ def parse(data: dict, path: Path | None = None) -> Config:
             include=_get(raw, where, "include", list, []),
             filter_file=_get(raw, where, "filter_file", str, ""),
             encrypted=_get(raw, where, "encrypted", bool, False),
+            links=_get(raw, where, "links", bool, False),
         )
         if job.include and job.exclude:
             raise ConfigError(f"{where} ({job.name!r}): include and exclude cannot be combined (rclone does not support mixing them)")
@@ -207,6 +209,8 @@ def render_job_block(job: Job) -> str:
         lines.append(f"filter_file = {json.dumps(job.filter_file, ensure_ascii=False)}")
     if job.encrypted:
         lines.append("encrypted = true")
+    if job.links:
+        lines.append("links = true")
     return "\n".join(lines) + "\n"
 
 

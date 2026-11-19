@@ -365,6 +365,14 @@ def run_backup(cfg: Config, dry_run: bool = False, now: datetime | None = None, 
             state["ok"] = state["ok"] and state["probe"]["ok"]
         if finishing:
             event({"event": "finishing_end", "ok": all(state[k]["ok"] for k in ("manifest", "probe") if k in state)})
+        if not dry_run and cfg.store_source and cfg.store_push:  # never lets the store fail the backup itself
+            from lifeboat import store  # late: store imports this module
+            try:
+                pushed = store.run_daily(cfg)
+                rl.line("", "Config store: " + ("pushed" if pushed["pushed"] else "nothing to push" if pushed["ok"] else
+                                              "push blocked, secret found" if pushed["blocked_findings"] else f"not pushed ({pushed['error']})"))
+            except Exception as e:  # noqa: BLE001
+                rl.line("", f"Config store: not pushed ({e})")
         failed = sum(r["rc"] != 0 for r in results)
         if dry_run:
             rl.line("", "Finished: dry run, nothing was changed")
@@ -557,7 +565,7 @@ def status(cfg: Config) -> dict:
          "last_age_days": age_days((last or {}).get("time")), "jobs": jobs,
          "settings": {"enabled": bool(cfg.settings_command), "command": cfg.settings_command,
                       "last": read_json(sd / "settings.json"), "log": tail(sd / "run.log", 20)},
-         "prune": read_json(sd / "prune.json"), "timers": timers(), "skills": None, "dropped": dropped_sources()}
+         "prune": read_json(sd / "prune.json"), "store_push": read_json(sd / "store.json") if cfg.store_push else None, "timers": timers(), "skills": None, "dropped": dropped_sources()}
     if cfg.skills_enabled:
         from lifeboat.skills import skills
         d["skills"] = skills()
@@ -603,6 +611,17 @@ def _verdict(d: dict) -> None:
     d["verdict"] = {"title": title, "weakest": weakest}
 
 
+def _store_problems(last: dict | None) -> list[dict]:
+    if not last or last.get("ok"):
+        return []
+    if last.get("blocked_findings"):
+        return [{"page": "store", "title": "Config store push blocked: secret found in " + last["blocked_findings"][0]["file"], "urgent": True,
+                 "body": "Remove the secret from the store folder; nothing was pushed to GitHub."}]
+    days = int(age_days(last.get("last_ok_time") or last.get("time")) or 0)
+    title = f"Config store not pushed for {days} days" if days else "Config store push failed"
+    return [{"page": "store", "title": title, "body": last.get("error") or "The last push did not complete.", "urgent": days >= STALE_DAYS}]
+
+
 def problems(cfg: Config, st: dict) -> list[dict]:
     out = []
     if not st["rclone"]["found"]:
@@ -628,6 +647,7 @@ def problems(cfg: Config, st: dict) -> list[dict]:
     if st["dropped"]:
         out.append({"page": "backups", "title": "No longer backed up: " + ", ".join(st["dropped"]), "urgent": True,
                     "body": "These were backed up before and no job covers them now. Add them back, or acknowledge to stop this reminder."})
+    out += _store_problems(st["store_push"])
     snap = st["settings"]["last"]
     if st["settings"]["enabled"] and snap and not snap.get("ok"):
         out.append({"page": "settings", "title": "Settings snapshot failed",

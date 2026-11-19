@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import os
 import re
+import shutil
 import subprocess
 from pathlib import Path
 
-from lifeboat import store_install
+from lifeboat import engine, github, secretscan, store_install
+from lifeboat.config import Config
 
 
 def _git_root(path: Path) -> Path | None:
@@ -95,3 +97,60 @@ def git_state(path: Path | str) -> dict:
     if (when := _git(path, "log", "-1", "--format=%cI")) and when.strip():
         state["last_commit_time"] = when.strip()
     return state
+
+
+# ---------------------------------------------------------------- daily push, after the backup jobs
+def _upstream(repo: Path | str) -> str | None:
+    out = _git(repo, "rev-parse", "--verify", "-q", "@{u}")
+    return out.strip() if out and out.strip() else None
+
+
+def _record(result: dict) -> dict:
+    prev = engine.read_json(engine.state_dir() / "store.json") or {}
+    result["last_ok_time"] = result["time"] if result["ok"] else prev.get("last_ok_time")
+    engine.write_json("store.json", result)
+    return result
+
+
+def _push(repo: Path, gh, binary) -> dict:
+    """Push with Lifeboat's own GitHub token when it has one, else with `skillshare push` (never `sync`)."""
+    if token := gh.token():
+        if (git_state(repo)["dirty_count"]):
+            for args in (["add", "-A"], ["-c", "user.name=Lifeboat", "-c", "user.email=lifeboat@localhost", "commit", "-qm", "Update skills"]):
+                if _git(repo, *args) is None:
+                    return {"ok": False, "error": "could not commit the changes"}
+        return github.push(repo, token)
+    binary = binary or store_install.skillshare_path() or shutil.which("skillshare")
+    if not binary:
+        return {"ok": False, "error": "skillshare is not installed and Lifeboat is not signed in to GitHub"}
+    r = store_install.run_skillshare(binary, ["push"], cwd=repo, timeout=180)
+    return {"ok": r.returncode == 0, "error": "" if r.returncode == 0 else (r.stderr or r.stdout).strip()[-500:]}
+
+
+def run_daily(cfg: Config, gh=None, binary: Path | str | None = None) -> dict | None:
+    """Secret scan, then push the store. Records {time, ok, pushed, blocked_findings, error} in store.json. None if not set up."""
+    if not (cfg.store_source and cfg.store_push):
+        return None
+    repo = Path(os.path.expanduser(cfg.store_source))
+    result = {"time": engine.now_iso(), "ok": False, "pushed": False, "blocked_findings": [], "error": ""}
+    before = git_state(repo)
+    if not before["is_repo"]:
+        result["error"] = f"{repo} is not a git repository"
+        return _record(result)
+    try:
+        secretscan.install_pre_push_hook(repo)
+    except (OSError, RuntimeError) as e:
+        result["error"] = f"could not install the pre-push check: {e}"
+        return _record(result)
+    found = secretscan.scan_working_tree(repo)
+    if before["last_commit_time"]:
+        found += secretscan.scan_range(repo, _upstream(repo), "HEAD")
+    if found:
+        result["blocked_findings"] = [{k: f[k] for k in ("file", "line", "rule")} for f in found]
+        return _record(result)
+    if not before["dirty_count"] and not before["ahead"]:
+        result["ok"] = True
+        return _record(result)
+    out = _push(repo, gh or github.GitHub(), binary)
+    result.update(ok=out["ok"], pushed=out["ok"], error=out["error"])
+    return _record(result)

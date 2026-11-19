@@ -45,6 +45,8 @@ class Config:
     manifest: str = ""
     probe: str = ""
     scan_ignore: list[str] = field(default_factory=list)
+    store_source: str = ""
+    store_push: bool = False
     path: Path = field(default_factory=lambda: config_path())
 
     def job(self, name: str) -> Job:
@@ -98,11 +100,11 @@ def _get(tbl: dict, where: str, key: str, typ, default):
 
 
 def parse(data: dict, path: Path | None = None) -> Config:
-    known = {"rclone", "schedule", "jobs", "settings", "modules", "device", "scan"}
+    known = {"rclone", "schedule", "jobs", "settings", "modules", "device", "scan", "store"}
     for k in data:
         if k not in known:
             raise ConfigError(f"unknown section {k!r}")
-    rc, sch, st, mod, dev, scn = (_table(data, k) for k in ("rclone", "schedule", "settings", "modules", "device", "scan"))
+    rc, sch, st, mod, dev, scn, sto = (_table(data, k) for k in ("rclone", "schedule", "settings", "modules", "device", "scan", "store"))
     cfg = Config(
         jobs=[],
         rclone_config=_get(rc, "rclone", "config", str, ""),
@@ -115,7 +117,12 @@ def parse(data: dict, path: Path | None = None) -> Config:
         manifest=_get(dev, "device", "manifest", str, ""),
         probe=_get(dev, "device", "probe", str, ""),
         scan_ignore=_get(scn, "scan", "ignore", list, []),
+        store_source=_get(sto, "store", "source", str, ""),
+        store_push=_get(sto, "store", "push", bool, False),
     )
+    for k in sto:
+        if k not in ("source", "push"):
+            raise ConfigError(f"store.{k} is not a known key")
     for k in scn:
         if k != "ignore":
             raise ConfigError(f"scan.{k} is not a known key")

@@ -134,3 +134,149 @@ def test_git_state_tracks_remote_dirty_ahead_behind(tmp_path):
     _git(b, "push", "-q")
     _git(a, "fetch", "-q")
     assert (store.git_state(a)["ahead"], store.git_state(a)["behind"]) == (1, 1)
+
+
+# ---------------------------------------------------------------- daily push
+AWS = "AKIA" + "IOSFODNN7EXAMPLE"
+
+
+class NoToken:
+    def token(self):
+        return None
+
+
+class Token:
+    def token(self):
+        return "ghu_" + "z" * 36
+
+
+@pytest.fixture
+def source(tmp_path, monkeypatch):
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+    monkeypatch.setenv("PYTHONPATH", str(PKG.parent))
+    bare = tmp_path / "remote.git"
+    _git(tmp_path, "init", "-q", "--bare", "-b", "main", str(bare))
+    src = tmp_path / "src"
+    _git(tmp_path, "clone", "-q", str(bare), str(src))
+    (src / "README.md").write_text("x\n")
+    _git(src, "add", "-A")
+    _git(src, "commit", "-qm", "init")
+    _git(src, "push", "-q", "-u", "origin", "HEAD:main")
+    _git(src, "branch", "-u", "origin/main")
+    return src
+
+
+def _cfg(src, push=True):
+    from lifeboat.config import parse
+    return parse({"jobs": [{"name": "d", "source": "/x", "dest": "a:b", "old": "a:c"}], "store": {"source": str(src), "push": push}})
+
+
+def _skillshare_push(tmp_path, log):
+    """A fake skillshare whose `push` commits everything and pushes, like the real one."""
+    p = tmp_path / "skillshare"
+    p.write_text(f'#!/bin/sh\necho "$*" >> {log}\ngit add -A && git -c user.name=t -c user.email=t@t commit -qm "Update skills" && git push -q\n')
+    p.chmod(0o755)
+    return p
+
+
+def test_daily_push_blocks_on_secret_and_does_not_push(source, tmp_path):
+    (source / "skills").mkdir()
+    (source / "skills" / "SKILL.md").write_text(f"key {AWS}\n")
+    log = tmp_path / "ss.log"
+    r = store.run_daily(_cfg(source), gh=NoToken(), binary=_skillshare_push(tmp_path, log))
+    assert r["ok"] is False and r["pushed"] is False
+    assert r["blocked_findings"][0]["file"] == "skills/SKILL.md" and AWS not in str(r)
+    assert not log.exists()
+    assert store.engine.read_json(store.engine.state_dir() / "store.json")["blocked_findings"]
+
+
+def test_daily_push_with_skillshare_when_no_lifeboat_token(source, tmp_path):
+    (source / "skills").mkdir()
+    (source / "skills" / "SKILL.md").write_text("# fine\n")
+    log = tmp_path / "ss.log"
+    r = store.run_daily(_cfg(source), gh=NoToken(), binary=_skillshare_push(tmp_path, log))
+    assert r["ok"] and r["pushed"] and r["blocked_findings"] == [] and r["error"] == ""
+    assert log.read_text().strip() == "push"
+    assert store.git_state(source)["ahead"] == 0
+    assert (source / ".git" / "hooks" / "pre-push").exists()
+
+
+def test_daily_push_with_lifeboat_token_uses_git_push(source, tmp_path, monkeypatch):
+    (source / "a.md").write_text("# fine\n")
+    pushed = []
+    monkeypatch.setattr(store.github, "push", lambda path, token: pushed.append((str(path), token)) or {"ok": True, "error": ""})
+    log = tmp_path / "ss.log"
+    r = store.run_daily(_cfg(source), gh=Token(), binary=_skillshare_push(tmp_path, log))
+    assert r["ok"] and r["pushed"] and not log.exists()
+    assert pushed == [(str(source), "ghu_" + "z" * 36)]
+    assert store.git_state(source)["dirty_count"] == 0  # committed first
+
+
+def test_daily_push_nothing_to_push(source, tmp_path):
+    r = store.run_daily(_cfg(source), gh=NoToken(), binary=_skillshare_push(tmp_path, tmp_path / "l"))
+    assert r["ok"] is True and r["pushed"] is False
+
+
+def test_daily_push_failure_recorded(source, tmp_path):
+    (source / "a.md").write_text("ok\n")
+    p = tmp_path / "skillshare"
+    p.write_text("#!/bin/sh\necho no remote >&2\nexit 1\n")
+    p.chmod(0o755)
+    r = store.run_daily(_cfg(source), gh=NoToken(), binary=p)
+    assert r["ok"] is False and "no remote" in r["error"]
+
+
+def test_daily_push_off_or_unconfigured(source, tmp_path):
+    assert store.run_daily(_cfg(source, push=False), gh=NoToken()) is None
+    assert store.run_daily(_cfg(""), gh=NoToken()) is None
+
+
+def test_last_ok_time_carries_forward(source, tmp_path):
+    cfg = _cfg(source)
+    ok = store.run_daily(cfg, gh=NoToken(), binary=_skillshare_push(tmp_path, tmp_path / "l"))
+    (source / "s.md").write_text(f"{AWS}\n")
+    bad = store.run_daily(cfg, gh=NoToken(), binary=_skillshare_push(tmp_path, tmp_path / "l"))
+    assert bad["ok"] is False and bad["last_ok_time"] == ok["time"]
+
+
+def test_status_and_problems_report_store_push(source, tmp_path, make_cfg, monkeypatch):
+    from datetime import datetime, timedelta
+    cfg = make_cfg(store={"source": str(source), "push": True})
+    assert cfg.store_push and engine_status(cfg)["store_push"] is None
+    engine = store.engine
+    ago = lambda d: (datetime.now().astimezone() - timedelta(days=d)).isoformat(timespec="seconds")  # noqa: E731
+    engine.write_json("store.json", {"time": ago(0), "ok": False, "pushed": False, "blocked_findings": [{"file": "skills/x/SKILL.md", "line": 2, "rule": "aws-access-key"}], "error": "", "last_ok_time": ago(1)})
+    st = engine_status(cfg)
+    assert any(p["title"] == "Config store push blocked: secret found in skills/x/SKILL.md" and p["urgent"] for p in engine.problems(cfg, st))
+    engine.write_json("store.json", {"time": ago(0), "ok": False, "pushed": False, "blocked_findings": [], "error": "boom", "last_ok_time": ago(3)})
+    assert any(p["title"] == "Config store not pushed for 3 days" for p in engine.problems(cfg, engine_status(cfg)))
+    engine.write_json("store.json", {"time": ago(0), "ok": True, "pushed": True, "blocked_findings": [], "error": "", "last_ok_time": ago(0)})
+    assert not any("Config store" in p["title"] for p in engine.problems(cfg, engine_status(cfg)))
+
+
+def engine_status(cfg):
+    return store.engine.status(cfg)
+
+
+def test_run_backup_pushes_the_store_after_the_jobs(source, tmp_path, make_cfg, monkeypatch):
+    from lifeboat import engine
+    (tmp_path / "src").mkdir(exist_ok=True)
+    (tmp_path / "src" / "f.txt").write_text("data")
+    (source / "a.md").write_text("fine\n")
+    calls = []
+    monkeypatch.setattr(store, "run_daily", lambda cfg: calls.append("daily") or {"ok": True, "pushed": True, "blocked_findings": [], "error": ""})
+    cfg = make_cfg(store={"source": str(source), "push": True})
+    assert engine.run_backup(cfg, settings=False)["ok"] and calls == ["daily"]
+    engine.run_backup(cfg, dry_run=True, settings=False)
+    assert calls == ["daily"]  # a dry run never pushes
+
+
+def test_a_crashing_store_push_never_fails_the_backup(source, tmp_path, make_cfg, monkeypatch):
+    from lifeboat import engine
+    (tmp_path / "src").mkdir(exist_ok=True)
+    (tmp_path / "src" / "f.txt").write_text("data")
+
+    def boom(cfg):
+        raise OSError("disk")
+    monkeypatch.setattr(store, "run_daily", boom)
+    assert engine.run_backup(make_cfg(store={"source": str(source), "push": True}), settings=False)["ok"] is True

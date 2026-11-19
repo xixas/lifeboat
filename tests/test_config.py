@@ -234,3 +234,12 @@ def test_ignore_text_rejects_a_bad_key():
     from lifeboat.config import add_ignore_text
     with pytest.raises(ConfigError, match="ignore"):
         add_ignore_text(BASE, "")
+
+
+def test_store_section_parses_and_is_validated():
+    c = parse({"jobs": [JOB]})
+    assert (c.store_source, c.store_push) == ("", False)
+    c = parse({"jobs": [JOB], "store": {"source": "~/s", "push": True}})
+    assert (c.store_source, c.store_push) == ("~/s", True)
+    with pytest.raises(ConfigError, match=r"store.nope"):
+        parse({"jobs": [JOB], "store": {"nope": 1}})

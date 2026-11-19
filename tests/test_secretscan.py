@@ -1,6 +1,8 @@
 import os
+import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -112,8 +114,19 @@ def install(repo):
     return repo / ".git" / "hooks" / "pre-push"
 
 
-def push_env():
-    return dict(os.environ, PYTHONPATH=str(Path(secretscan.__file__).parent.parent))
+_SHIM = Path(tempfile.mkdtemp(prefix="lifeboat-shim-"))
+(_SHIM / "lifeboat").write_text(f'#!/bin/sh\nPYTHONPATH="{Path(secretscan.__file__).parent.parent}" exec {sys.executable} -m lifeboat "$@"\n')
+(_SHIM / "lifeboat").chmod(0o755)
+
+
+_BIN = Path(tempfile.mkdtemp(prefix="lifeboat-bin-"))  # just what git and the hook need, so there is no other `lifeboat` on PATH
+for _tool in ("git", "sh", "cat", "dirname"):
+    (_BIN / _tool).symlink_to(shutil.which(_tool))
+
+
+def push_env(on_path=True):
+    """git's environment with a `lifeboat` on PATH (or without one), as it is where Lifeboat is installed."""
+    return dict(os.environ, PATH=os.pathsep.join(([str(_SHIM)] if on_path else []) + [str(_BIN)]), PYTHONPATH="")
 
 
 def test_hook_blocks_secret_push_and_allows_clean(repo, tmp_path):
@@ -141,7 +154,7 @@ def test_hook_chains_existing_and_is_idempotent(repo):
     install(repo)
     chained = repo / ".git" / "hooks" / "pre-push.lifeboat-chained"
     assert chained.read_text().endswith("exit 7\n")
-    assert hook.read_text().count("lifeboat.secretscan") == 1
+    assert hook.read_text().count(secretscan.HOOK_MARK) == 1
     r = subprocess.run([str(hook), "origin", "x"], input="", capture_output=True, text=True, cwd=repo, env=push_env())
     assert r.returncode == 7 and "chained-ran" in r.stderr
 
@@ -150,7 +163,7 @@ def test_cli_pre_push_exit_codes(repo):
     base = git(repo, "rev-parse", "HEAD")
     head = commit(repo, {"a.txt": AWS + "\n"})
     line = f"refs/heads/main {head} refs/heads/main {base}\n"
-    r = subprocess.run([sys.executable, "-m", "lifeboat.secretscan", "--pre-push"], input=line, capture_output=True, text=True, cwd=repo, env=push_env())
+    r = subprocess.run(["lifeboat", "secret-scan", "--pre-push"], input=line, capture_output=True, text=True, cwd=repo, env=push_env())
     assert r.returncode == 1
 
 
@@ -184,3 +197,57 @@ def test_a_risky_file_added_then_deleted_is_still_found(repo):
     git(repo, "commit", "-qm", "rm")
     found = secretscan.scan_range(repo, base, "HEAD")
     assert [(f["file"], f["rule"]) for f in found] == [(".env", "risky-file-name")]
+
+
+# ---------------------------------------------------------------- the hook must never brick pushes
+def _remote(repo, tmp_path):
+    bare = tmp_path / "r.git"
+    subprocess.run(["git", "init", "-q", "--bare", str(bare)], check=True)
+    git(repo, "remote", "add", "origin", str(bare))
+    return bare
+
+
+def test_the_hook_does_not_pin_a_python_path_to_a_checkout(repo):
+    text = install(repo).read_text()
+    assert "PYTHONPATH" not in text and "python3 -m" not in text and "lifeboat secret-scan --pre-push" in text
+
+
+def test_the_hook_fails_open_with_a_warning_when_lifeboat_is_not_installed(repo, tmp_path):
+    bare = _remote(repo, tmp_path)
+    install(repo)
+    commit(repo, {"SKILL.md": f"token {GH}\n"})
+    r = subprocess.run(["git", "-C", str(repo), "push", "origin", "main"], capture_output=True, text=True, env=push_env(on_path=False))
+    assert r.returncode == 0 and "lifeboat" in r.stderr and "not found" in r.stderr
+    assert git(bare, "rev-list", "--count", "main") == "2"
+
+
+def test_the_hook_still_blocks_when_lifeboat_is_on_path(repo, tmp_path):
+    _remote(repo, tmp_path)
+    install(repo)
+    commit(repo, {"SKILL.md": f"token {GH}\n"})
+    r = subprocess.run(["git", "-C", str(repo), "push", "origin", "main"], capture_output=True, text=True, env=push_env())
+    assert r.returncode != 0 and "SKILL.md" in r.stderr
+
+
+# ---------------------------------------------------------------- fewer false positives
+@pytest.mark.parametrize("text,flagged", [
+    ("token: github_installation_token", False),
+    ("api_key = my-long-kebab-case-name", False),
+    ("password: " + "a" * 20, False),          # letters only
+    ("secret: 1234567890123456", False),        # digits only
+    ("token: a8F3k2" + "Zq9Lm4Xp7R", True),     # 16+ chars with a digit and a letter
+    ('password: "hunter2hunter2hunter2"', True),
+])
+def test_generic_secret_needs_a_digit_and_a_letter(repo, text, flagged):
+    base = git(repo, "rev-parse", "HEAD")
+    head = commit(repo, {"n.md": text + "\n"})
+    assert bool(secretscan.scan_range(repo, base, head)) is flagged
+
+
+def test_the_allowlist_silences_a_rule_in_a_file_or_a_line(repo):
+    base = git(repo, "rev-parse", "HEAD")
+    head = commit(repo, {"docs/a.md": f"x\n{AWS}\n", "docs/b.md": f"{AWS}\n{AWS}\n"})
+    assert len(secretscan.scan_range(repo, base, head)) == 3
+    (repo / ".lifeboat-secrets-allow").write_text("# example keys\naws-access-key:docs/a.md\naws-access-key:docs/b.md:2\n\n")
+    assert [(f["file"], f["line"]) for f in secretscan.scan_range(repo, base, head)] == [("docs/b.md", 1)]
+    assert secretscan.scan_working_tree(repo) == []

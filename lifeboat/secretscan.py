@@ -21,7 +21,7 @@ RULES = {
     "anthropic-key": r"\bsk-ant-[A-Za-z0-9_-]{20,}",
     "openai-key": r"\bsk-[A-Za-z0-9_-]{20,}",
     "jwt": r"\beyJ[A-Za-z0-9_-]{5,}\.eyJ[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}",
-    "generic-secret": r"""(?i)(?:api[_-]?key|secret|token|password)\s*[:=]\s*['"]?[A-Za-z0-9/+_\-]{16,}""",
+    "generic-secret": r"""(?i)(?:api[_-]?key|secret|token|password)\s*[:=]\s*['"]?([A-Za-z0-9/+_\-]{16,})""",
 }
 PATTERNS = {name: re.compile(rx) for name, rx in RULES.items()}
 RISKY_NAMES = (".env", ".env.*", "id_rsa*", "*.pem", "*.key", "*credentials*", "*.p8", "*.p12")
@@ -38,11 +38,41 @@ def _finding(file, line, rule, source="lifeboat") -> dict:
     return {"file": file, "line": line, "rule": rule, "source": source}
 
 
+def _looks_random(value: str) -> bool:
+    """A generic secret needs a digit and a letter: 'github_installation_token' is a name, not a value."""
+    return any(c.isdigit() for c in value) and any(c.isalpha() for c in value)
+
+
+ALLOW_FILE = ".lifeboat-secrets-allow"
+
+
+def _allowlist(repo) -> set[tuple]:
+    """Entries of <repo>/.lifeboat-secrets-allow: `rule:path` or `rule:path:line`, one per line, # for comments."""
+    try:
+        text = (Path(repo) / ALLOW_FILE).read_text(errors="replace")
+    except OSError:
+        return set()
+    out = set()
+    for ln in text.splitlines():
+        ln = ln.strip()
+        if ln and not ln.startswith("#"):
+            rule, _, rest = ln.partition(":")
+            path, _, line = rest.rpartition(":") if rest.rpartition(":")[2].isdigit() else (rest, "", "")
+            out.add((rule, path, int(line) if line else None))
+    return out
+
+
+def _allowed(repo, found: list[dict]) -> list[dict]:
+    allow = _allowlist(repo)
+    return [f for f in found if (f["rule"], f["file"], None) not in allow and (f["rule"], f["file"], f["line"]) not in allow] if allow else found
+
+
 def _scan_text(file: str, lines, first_line: int = 1) -> list[dict]:
     out = []
     for n, text in enumerate(lines, first_line):
         for rule, rx in PATTERNS.items():
-            if rx.search(text):
+            m = rx.search(text)
+            if m and (rule != "generic-secret" or _looks_random(m.group(1))):
                 out.append(_finding(file, n, rule))
                 break  # one finding per line
     return out
@@ -124,7 +154,7 @@ def scan_range(repo, base: str | None, head: str = "HEAD") -> list[dict]:
     if not base:
         for f in _git(repo, "ls-tree", "-r", "--name-only", head).splitlines():
             found += _scan_text(f, _git(repo, "show", f"{head}:{f}").splitlines())
-    return _dedupe(found + _gitleaks(repo, base, head))
+    return _allowed(repo, _dedupe(found + _gitleaks(repo, base, head)))
 
 
 def _dedupe(found: list[dict]) -> list[dict]:
@@ -149,7 +179,7 @@ def scan_working_tree(repo) -> list[dict]:
         except OSError:
             pass
     changed = _git(repo, "diff", "--name-only", "HEAD").splitlines() + [f for f in untracked if f]
-    return _dedupe(found + [_finding(f, 0, "risky-file-name") for f in changed if _risky_name(f)])
+    return _allowed(repo, _dedupe(found + [_finding(f, 0, "risky-file-name") for f in changed if _risky_name(f)]))
 
 
 def scan_pre_push(repo, stdin_text: str) -> list[dict]:
@@ -166,7 +196,14 @@ def scan_pre_push(repo, stdin_text: str) -> list[dict]:
 HOOK = f"""#!/bin/sh
 {HOOK_MARK}: blocks a push that carries a secret. Edits here are overwritten.
 input=$(cat)
-printf '%s\\n' "$input" | PYTHONPATH="{{pythonpath}}${{PYTHONPATH:+:$PYTHONPATH}}" python3 -m lifeboat.secretscan --pre-push "$@" || exit 1
+if command -v lifeboat >/dev/null 2>&1; then
+  printf '%s\\n' "$input" | lifeboat secret-scan --pre-push "$@"
+  rc=$?
+  if [ "$rc" -eq 1 ]; then exit 1; fi
+  if [ "$rc" -ne 0 ]; then echo "lifeboat: the secret check could not run (exit $rc); not blocking this push" >&2; fi
+else
+  echo "lifeboat: not found on PATH, so the secret check was skipped for this push" >&2
+fi
 chained="$(dirname "$0")/pre-push.lifeboat-chained"
 if [ -x "$chained" ]; then
   printf '%s\\n' "$input" | "$chained" "$@" || exit $?
@@ -185,7 +222,7 @@ def install_pre_push_hook(repo) -> Path:
         if chained.exists():
             raise RuntimeError(f"{chained} already exists; not overwriting a hook")
         hook.rename(chained)
-    hook.write_text(HOOK.replace("{pythonpath}", str(Path(__file__).resolve().parent.parent)))
+    hook.write_text(HOOK)
     hook.chmod(0o755)
     return hook
 
@@ -199,7 +236,11 @@ def main(argv: list[str] | None = None) -> int:
     if "--pre-push" not in argv:
         print("usage: python3 -m lifeboat.secretscan --pre-push  (reads git's pre-push lines on stdin)", file=sys.stderr)
         return 2
-    found = scan_pre_push(os.getcwd(), sys.stdin.read())
+    try:
+        found = scan_pre_push(os.getcwd(), sys.stdin.read())
+    except Exception as e:  # noqa: BLE001 - a crash must not look like "blocked"
+        print(f"lifeboat: the secret check failed ({type(e).__name__})", file=sys.stderr)
+        return 3
     if found:
         print("lifeboat: push blocked, possible secrets found:\n" + format_findings(found), file=sys.stderr)
         return 1

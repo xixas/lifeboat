@@ -782,3 +782,41 @@ def test_retired_jobs_are_restorable_but_never_written_to_a_config(wiz, fake_hom
     assert [j.name for j in setup.restore_config(m, fake_home / "r.conf").jobs] == ["documents", "ssh-keys", "pictures"]
     setup.config_from_manifest(wiz, m, "13:00")
     assert [j.name for j in config.load_config(wiz).jobs] == ["documents", "ssh-keys"]
+
+
+# ---------------------------------------------------------------- jobs from catalogue items
+def test_a_dir_item_becomes_a_job_with_its_excludes_links_and_encryption(fake_home):
+    item = {"key": "claude", "label": "Claude", "path": str(fake_home / ".claude"), "kind": "dir", "secret": True,
+            "exclude": ["history.jsonl", "sessions/**"], "links": True}
+    job = setup.wizard_job("laptop", item)
+    assert (job.name, job.source, job.encrypted, job.links) == ("claude", "~/.claude", True, True)
+    assert job.exclude[:2] == ["history.jsonl", "sessions/**"] and set(setup.JUNK_EXCLUDES) <= set(job.exclude)
+    assert job.dest == "lifeboat-secure:laptop/claude"
+    plain = setup.wizard_job("laptop", folder("documents", "Documents", str(fake_home / "Documents")))
+    assert plain.links is False and plain.exclude == setup.JUNK_EXCLUDES  # items from the old wizard are unchanged
+
+
+def test_file_items_share_one_encrypted_home_files_job(wiz, fake_home):
+    for name in (".zshrc", ".npmrc"):
+        (fake_home / name).write_text("x")
+    items = [folder("documents", "Documents", str(fake_home / "Documents")),
+             {**folder("zshrc", ".zshrc", str(fake_home / ".zshrc")), "kind": "file"},
+             {**folder("npmrc", ".npmrc", str(fake_home / ".npmrc"), secret=True), "kind": "file"}]
+    setup.write_wizard_config(wiz, "laptop", items, "13:00")
+    cfg = config.load_config(wiz)
+    assert [j.name for j in cfg.jobs] == ["documents", "home-files"]
+    hf = cfg.job("home-files")
+    assert (hf.source, hf.encrypted, hf.dest, hf.exclude) == ("~", True, "lifeboat-secure:laptop/home-files", [])
+    assert hf.include == ["/.zshrc", "/.npmrc"]
+
+
+def test_home_files_job_syncs_only_the_chosen_files(fake_home, tmp_path):
+    for name in (".zshrc", ".other"):
+        (fake_home / name).write_text(name)
+    (fake_home / "Documents").mkdir()
+    (fake_home / "Documents" / "d.txt").write_text("d")
+    job = setup.home_files_job("laptop", [str(fake_home / ".zshrc")])
+    job.dest, job.old = f"localdrv:{tmp_path}/dest", f"localdrv:{tmp_path}/old"
+    cfg = config.parse({"jobs": [{"name": job.name, "source": job.source, "dest": job.dest, "old": job.old, "include": job.include}]})
+    assert engine.run_backup(cfg)["ok"]
+    assert sorted(p.name for p in (tmp_path / "dest").rglob("*") if p.is_file()) == [".zshrc"]

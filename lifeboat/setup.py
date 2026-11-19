@@ -428,8 +428,27 @@ def wizard_job(device: str, choice: dict) -> Job:
         base, dest_name = f"{CRYPT_REMOTE}:{device}", slug.lower()
     else:
         base, dest_name = f"{DRIVE_REMOTE}:{drive_root()}/{device}", slug
+    exclude = list(dict.fromkeys([*choice.get("exclude", []), *JUNK_EXCLUDES]))
     return Job(name=slug.lower(), source=_collapse_home(choice["path"]), dest=f"{base}/{dest_name}", old=f"{base}/_old",
-               exclude=list(JUNK_EXCLUDES), encrypted=bool(choice["secret"]))
+               exclude=exclude, encrypted=bool(choice["secret"]), links=bool(choice.get("links")))
+
+
+def home_files_job(device: str, paths: list[str]) -> Job:
+    """One encrypted job for every chosen single file under home: source ~, an include list of '/<relative path>'."""
+    home = Path.home()
+    try:
+        include = ["/" + Path(p).relative_to(home).as_posix() for p in paths]
+    except ValueError:
+        raise ConfigError("Single files can only be backed up from your home folder.") from None
+    base = f"{CRYPT_REMOTE}:{device}"
+    return Job(name="home-files", source="~", dest=f"{base}/home-files", old=f"{base}/_old", include=include, encrypted=True)
+
+
+def wizard_jobs(device: str, choices: list[dict]) -> list[Job]:
+    """The jobs for everything chosen: one per folder, plus one `home-files` job for all the single files."""
+    jobs = [wizard_job(device, c) for c in choices if c.get("kind", "dir") == "dir"]
+    files = [c["path"] for c in choices if c.get("kind") == "file"]
+    return jobs + ([home_files_job(device, files)] if files else [])
 
 
 def unique_device_name(base: str, existing: list[str]) -> str:
@@ -471,7 +490,7 @@ def write_wizard_config(path: Path, device: str, choices: list[dict], daily_at: 
     A device name already used in this account would share (and prune) another laptop's folder, so it is refused."""
     if device in (existing_devices or []):
         raise SetupError(f"The device name {device!r} is already used by another laptop on this account.")
-    _write_new_config(path, device, daily_at, [wizard_job(device, c) for c in choices])
+    _write_new_config(path, device, daily_at, wizard_jobs(device, choices))
 
 
 def _manifest_jobs(manifest: dict, retired: bool = False) -> list[Job]:

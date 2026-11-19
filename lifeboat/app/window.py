@@ -155,6 +155,8 @@ class Win(PagesMixin, Adw.ApplicationWindow):
         self.set_pages(self.page_ids())
         for pid, dot in self.dots.items():
             st = self.st["status"][pid] if self.st else "warn"
+            if pid == "skills" and st == "ok" and self.st["skills"]["own"] and not self.data["skills_cover"]["backed_up"]:
+                st = "warn"  # your own skills are not (recently) backed up
             dot.set_from_icon_name(ICONS[st])
             for c in CSS.values():
                 dot.remove_css_class(c)

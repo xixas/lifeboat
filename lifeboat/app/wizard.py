@@ -143,11 +143,16 @@ class SetupWizard(AccountDialog):
         (self.choices.ignore if on else self.choices.unignore)(f["path"])
         self._validate()
 
+    @staticmethod
+    def _measured(f):
+        """Secret items (small key folders) and single files get no size."""
+        return not f["secret"] and f.get("kind", "dir") == "dir"
+
     def _suggested_row(self, f):
-        return self._make_row(f, measure=not f["secret"])
+        return self._make_row(f, measure=self._measured(f))
 
     def _start_measure(self, f):
-        if not f["secret"]:
+        if self._measured(f):
             self._measure(f)
 
     def _make_row(self, f, measure=True, removable=False):

@@ -1346,11 +1346,13 @@ win.show_page("skills")
 text = labels(win)
 assert "Yours · 1 · not backed up" in text and "Not in any backup job: mine" in text, text
 assert not any(t.startswith("External") and "backed up with" in t for t in text)
+assert win.dots["skills"].get_icon_name() == "dialog-warning-symbolic"  # the sidebar mark agrees with the page
 shot("13-skills-not-backed-up", win.get_content())
 click(win, "Add to Backup")
 assert pump(lambda: "Yours · 1 · backed up" in labels(win)), labels(win)
 assert "Add to Backup" not in [b.get_label() for b in buttons(win)]
 assert any(j.source == str(repo) or j.source.endswith("/src/my-skills") for j in config.load_config(cfg_path).jobs)
+assert pump(lambda: win.dots["skills"].get_icon_name() == "object-select-symbolic")
 shot("14-skills-backed-up", win.get_content())
 print("SKILLS OK")
 '''

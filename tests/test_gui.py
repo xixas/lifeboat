@@ -1469,6 +1469,8 @@ win.show_page("store")
 names = [b.get_label() for b in buttons(win)]
 assert "Sign in" in names and "Sign out" not in names, names
 assert "Signed out: pushes are paused until you sign in" in labels(win), labels(win)
+win.toasts.dismiss_all()  # the "Signed out" toast would cover the buttons in the picture
+pump(timeout=1.0)
 shot("6d-store-status-signed-out", win.get_content())
 click(win, "Sign in")
 sdlg = win.get_visible_dialog()

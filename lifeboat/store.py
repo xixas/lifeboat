@@ -154,7 +154,8 @@ def _push(repo: Path, gh) -> dict:
     branch, sha = git_state(repo)["branch"], (_git(repo, "rev-parse", "HEAD") or "").strip()
     out = github.push(repo, token, name)
     if out["ok"] and branch and sha:  # a push to a URL moves no tracking ref: do it, so ahead/behind and the next scan are right
-        for args in (["update-ref", f"refs/remotes/origin/{branch}", sha], ["branch", "--set-upstream-to", f"origin/{branch}", branch]):
+        for args in (["update-ref", f"{secretscan.PUSHED}/{branch}", sha],  # the one ref the secret scan trusts as already checked
+                     ["update-ref", f"refs/remotes/origin/{branch}", sha], ["branch", "--set-upstream-to", f"origin/{branch}", branch]):
             _git(repo, *args)
     if not out["ok"] and AUTH_FAILED.search(out["error"]):
         gh.sign_out()  # the token no longer works: say so instead of failing the same way every day

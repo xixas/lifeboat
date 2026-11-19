@@ -32,6 +32,7 @@ PATTERNS = {name: re.compile(rx) for name, rx in RULES.items()}
 RISKY_NAMES = (".env", ".env.*", "id_rsa*", "*.pem", "*.key", "*credentials*", "*.p8", "*.p12")
 HOOK_MARK = "# lifeboat-secretscan"
 ZERO = "0" * 40
+PUSHED = "refs/lifeboat/pushed"  # <PUSHED>/<branch>: what Lifeboat itself last pushed, the only thing a scan treats as already checked
 
 
 class ScannerUnavailable(RuntimeError):
@@ -142,7 +143,7 @@ def _layer(strict: bool, scan, *args) -> list[dict]:
 
 
 def _gitleaks_commits(top: str, base, head) -> list[dict]:
-    opts = f"{head} --not --remotes" + (f" {base}" if base else "")
+    opts = f"{head} --not --glob={PUSHED}/*" + (f" {base}" if base else "")
     return _from_report(_run_gitleaks("git", top, [f"--log-opts={opts}"], top))
 
 
@@ -198,12 +199,12 @@ def _changed(repo, commit: str) -> list[tuple[str, str]]:
 
 
 def scan_range(repo, base: str | None = None, head: str = "HEAD", strict: bool = False) -> list[dict]:
-    """Findings in the whole content of every file each unpushed commit adds or changes (`head`, minus whatever any remote-tracking
-    ref and `base` already have), one commit at a time (`commit` is a short sha). It never needs to know what the remote holds."""
+    """Findings in the whole content of every file each unpushed commit adds or changes (`head`, minus what Lifeboat has pushed
+    (refs/lifeboat/pushed/*, not any remote-tracking ref) and `base`), one commit at a time (`commit` is a short sha). It never needs to know what the remote holds."""
     top = _top(repo)
     found: list[dict] = []
     by_blob: dict[str, list[dict]] = {}
-    for sha in _git(top, "rev-list", "--reverse", head, "--not", "--remotes", *([base] if base else [])).split():
+    for sha in _git(top, "rev-list", "--reverse", head, "--not", f"--glob={PUSHED}/*", *([base] if base else [])).split():
         for blob, path in _changed(top, sha):
             if blob not in by_blob:
                 by_blob[blob] = _scan_bytes("", _git_bytes(top, "cat-file", "blob", blob))
@@ -241,6 +242,14 @@ def scan_working_tree(repo, strict: bool = False) -> list[dict]:
     return _allowed(top, _dedupe(found))
 
 
+def _lifeboat_pushed(repo, remote_sha: str, local_sha: str) -> bool:
+    """git's remote sha is trusted as "already checked" only if Lifeboat pushed it (it sits under refs/lifeboat/pushed) and it is an ancestor of
+    what is pushed now. A sha this clone never saw, or one a different tool pushed, gets no exemption: the whole history is scanned."""
+    if remote_sha == ZERO or not _git(repo, "for-each-ref", "--contains", remote_sha, PUSHED).strip():
+        return False
+    return subprocess.run(["git", "-C", str(repo), "merge-base", "--is-ancestor", remote_sha, local_sha], capture_output=True, check=False).returncode == 0
+
+
 def scan_pre_push(repo, stdin_text: str) -> list[dict]:
     """Scan what git is about to push: stdin lines are `<local ref> <local sha> <remote ref> <remote sha>`."""
     found = []
@@ -248,7 +257,7 @@ def scan_pre_push(repo, stdin_text: str) -> list[dict]:
         parts = line.split()
         if len(parts) != 4 or parts[1] == ZERO:
             continue  # a deletion pushes nothing
-        found += scan_range(repo, None, parts[1])  # the remote's sha (parts[3]) is not needed, and may not be in this clone
+        found += scan_range(repo, parts[3] if _lifeboat_pushed(repo, parts[3], parts[1]) else None, parts[1])
     return found
 
 

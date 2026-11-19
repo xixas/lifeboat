@@ -235,6 +235,21 @@ def test_a_configured_store_never_pushes_without_a_lifeboat_token(source, tmp_pa
     assert (source / ".git" / "hooks" / "pre-push").exists()
 
 
+def test_a_successful_push_records_what_lifeboat_pushed(source, tmp_path, monkeypatch):
+    (source / "a.md").write_text("# fine\n")
+    monkeypatch.setattr(store.github, "push", lambda *a, **kw: {"ok": True, "error": ""})
+    r = store.run_daily(_cfg(source), gh=Token())
+    assert r["pushed"]
+    assert _git(source, "rev-parse", "refs/lifeboat/pushed/main") == _git(source, "rev-parse", "HEAD")
+
+
+def test_a_failed_push_records_nothing(source, tmp_path, monkeypatch):
+    (source / "a.md").write_text("# fine\n")
+    monkeypatch.setattr(store.github, "push", lambda *a, **kw: {"ok": False, "error": "no"})
+    store.run_daily(_cfg(source), gh=Token())
+    assert not _git(source, "for-each-ref", "refs/lifeboat/pushed")
+
+
 def test_daily_push_with_lifeboat_token_uses_git_push(source, tmp_path, monkeypatch):
     (source / "a.md").write_text("# fine\n")
     pushed = []

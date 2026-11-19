@@ -78,7 +78,7 @@ def test_a_changed_file_is_scanned_whole_and_an_already_pushed_commit_is_not(rep
     old = commit(repo, {"a.txt": f"{AWS}\n"})
     head = commit(repo, {"a.txt": f"{AWS}\nsafe\n"})
     assert [(f["file"], f["line"], f["commit"]) for f in secretscan.scan_range(repo, old, head)] == [("a.txt", 1, head[:7])]
-    git(repo, "update-ref", "refs/remotes/origin/main", head)  # on the remote already
+    git(repo, "update-ref", "refs/lifeboat/pushed/main", head)  # Lifeboat pushed it
     assert secretscan.scan_range(repo, None, head) == []
 
 
@@ -110,7 +110,7 @@ def test_gitleaks_findings_are_merged_with_lifeboats_own(repo, fake_gitleaks):
         ("deep.txt", 4, "custom-rule", "gitleaks", "abcdef0"), ("a.txt", 1, "aws-access-key", "lifeboat", head[:7])}
     call = next(ln for ln in fake_gitleaks.log().splitlines() if ln.startswith("git|"))
     for want in ("--no-banner", "--report-format json", "--report-path ", "--redact", "--ignore-gitleaks-allow",
-                 f"--log-opts={head} --not --remotes {base}"):  # ignore-allow: a repo's own comments cannot switch rules off
+                 f"--log-opts={head} --not --glob=refs/lifeboat/pushed/* {base}"):  # ignore-allow: a repo's own comments cannot switch rules off
         assert want in call, call
 
 
@@ -547,11 +547,43 @@ def test_a_force_push_over_a_remote_sha_this_clone_never_fetched_is_still_scanne
     assert [(f["file"], f["rule"]) for f in found] == [("SKILL.md", "aws-access-key")]
 
 
-def test_commits_already_on_a_remote_are_not_scanned_again(repo):
+def test_commits_lifeboat_already_pushed_are_not_scanned_again(repo):
     commit(repo, {"SKILL.md": f"key {AWS}\n"})
-    git(repo, "update-ref", "refs/remotes/origin/main", "HEAD")
+    git(repo, "update-ref", "refs/lifeboat/pushed/main", "HEAD")
     head = commit(repo, {"b.md": "fine\n"})
     assert secretscan.scan_pre_push(repo, f"refs/heads/main {head} refs/heads/main {'0' * 40}\n") == []
+
+
+def test_a_commit_on_a_backup_remote_that_lifeboat_never_pushed_is_scanned(repo, tmp_path):
+    bare = tmp_path / "backup.git"
+    subprocess.run(["git", "init", "-q", "--bare", str(bare)], check=True)
+    git(repo, "remote", "add", "backup", str(bare))
+    head = commit(repo, {"SKILL.md": f"key {AWS}\n"})
+    git(repo, "push", "-q", "backup", "main")
+    git(repo, "fetch", "-q", "backup")
+    assert git(repo, "rev-parse", "refs/remotes/backup/main") == head
+    assert [(f["file"], f["rule"]) for f in secretscan.scan_range(repo, None, head)] == [("SKILL.md", "aws-access-key")]
+
+
+def test_a_stale_remote_tracking_ref_exempts_nothing(repo):
+    head = commit(repo, {"SKILL.md": f"key {AWS}\n"})
+    git(repo, "update-ref", "refs/remotes/origin/main", head)
+    assert [f["rule"] for f in secretscan.scan_range(repo, None, head)] == ["aws-access-key"]
+
+
+def test_the_hook_trusts_git_s_remote_sha_only_when_lifeboat_pushed_it(repo):
+    old = commit(repo, {"SKILL.md": f"key {AWS}\n"})
+    head = commit(repo, {"b.md": "fine\n"})
+    line = f"refs/heads/main {head} refs/heads/main {old}\n"
+    # an ancestor, but not one Lifeboat pushed: the whole history is scanned
+    assert [f["rule"] for f in secretscan.scan_pre_push(repo, line)] == ["aws-access-key"]
+    git(repo, "update-ref", "refs/lifeboat/pushed/main", old)
+    assert secretscan.scan_pre_push(repo, line) == []
+    # a remote sha that is not an ancestor of what is pushed (a force push) gets no exemption of its own
+    other = git(repo, "commit-tree", "-m", "x", f"{head}^{{tree}}")
+    git(repo, "update-ref", "refs/lifeboat/pushed/other", other)
+    git(repo, "update-ref", "-d", "refs/lifeboat/pushed/main")
+    assert [f["rule"] for f in secretscan.scan_pre_push(repo, f"refs/heads/main {head} refs/heads/main {other}\n")] == ["aws-access-key"]
 
 
 # ---------------------------------------------------------------- the hook finds lifeboat without PATH

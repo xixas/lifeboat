@@ -261,14 +261,14 @@ while IFS= read -r line || [ -n "$line" ]; do
   input="$input$line
 "
 done
-lb() {{
-  if [ -x @EXE@ ]; then @EXE@ @ARGS@"$@"
-  elif command -v lifeboat >/dev/null 2>&1; then lifeboat "$@"
-  else return 127
-  fi
-}}
-if [ "$(lb secret-scan --probe 2>/dev/null)" = "{PROBE_MARKER}" ]; then
-  printf '%s' "$input" | lb secret-scan --pre-push "$@"
+lb1() {{ @EXE@ @ARGS@"$@"; }}
+lb2() {{ lifeboat "$@"; }}
+lb=""
+if [ "$(lb1 secret-scan --probe 2>/dev/null)" = "{PROBE_MARKER}" ]; then lb=lb1
+elif [ "$(lb2 secret-scan --probe 2>/dev/null)" = "{PROBE_MARKER}" ]; then lb=lb2
+fi
+if [ -n "$lb" ]; then
+  printf '%s' "$input" | $lb secret-scan --pre-push "$@"
   rc=$?
   if [ "$rc" -ne 0 ]; then
     echo "lifeboat: push blocked (the secret check exited $rc)" >&2
@@ -285,10 +285,20 @@ exit 0
 """
 
 
+def _package_parent() -> Path:
+    """The folder that holds the `lifeboat` package: <share>/lifeboat/lib for install.sh, site-packages, or a checkout."""
+    return Path(__file__).resolve().parent.parent
+
+
 def _lifeboat_cmd() -> list[str]:
-    """How the hook runs Lifeboat, fixed at install time: the absolute path of this machine's `lifeboat`, else this Python in isolated mode (-I: ignores the cwd, which is the pushed repo, and PYTHON* variables)."""
+    """How the hook runs Lifeboat, fixed at install time: the absolute path of this machine's `lifeboat` console script, else this
+    Python in isolated mode (-I ignores the cwd, which is the pushed repo, and PYTHON* variables, so the launcher's PYTHONPATH is gone)
+    with the package's folder put on sys.path by absolute path."""
     exe = shutil.which("lifeboat")
-    return [os.path.abspath(exe)] if exe else [sys.executable, "-I", "-m", "lifeboat"]  # -I: not the pushed repo (the cwd) nor PYTHON* env
+    if exe:
+        return [os.path.abspath(exe)]
+    code = f"import sys; sys.path.insert(0, {str(_package_parent())!r}); from lifeboat.cli import main; sys.exit(main())"
+    return [sys.executable, "-I", "-c", code]
 
 
 def hook_text() -> str:

@@ -592,11 +592,12 @@ def test_the_hook_falls_back_to_path_when_the_absolute_path_is_gone(repo, tmp_pa
     assert r.returncode == 0 and "not found" in r.stderr  # neither exists: fail open, with a warning
 
 
-def test_without_a_lifeboat_executable_the_hook_runs_this_python_with_dash_m(repo, monkeypatch):
+def test_without_a_lifeboat_executable_the_hook_runs_this_python_isolated_with_the_package_folder(repo, monkeypatch):
     monkeypatch.setattr(secretscan.shutil, "which", lambda name: None)
-    assert _REAL_CMD() == [sys.executable, "-I", "-m", "lifeboat"]
+    cmd = _REAL_CMD()
+    assert cmd[:3] == [sys.executable, "-I", "-c"] and str(secretscan._package_parent()) in cmd[3]
     monkeypatch.setattr(secretscan, "_lifeboat_cmd", _REAL_CMD)
-    assert f"{sys.executable} -I -m lifeboat" in install(repo).read_text()
+    assert f"{sys.executable} -I -c" in install(repo).read_text()
 
 
 def test_a_lifeboat_folder_in_the_pushed_repo_is_never_run_by_the_hook(repo, tmp_path, monkeypatch):
@@ -611,3 +612,35 @@ def test_a_lifeboat_folder_in_the_pushed_repo_is_never_run_by_the_hook(repo, tmp
     env = dict(os.environ, PATH=str(_BIN), PYTHONPATH="")
     subprocess.run([str(hook), "origin", "x"], input=_push_line(head), capture_output=True, text=True, cwd=repo, env=env)
     assert not marker.exists()
+
+
+# ---------------------------------------------------------------- an install.sh install: the launcher's PYTHONPATH is not the hook's
+def _install_sh_layout(tmp_path):
+    """install.sh puts the package in <share>/lifeboat/lib and a launcher on PATH that sets PYTHONPATH for `python3 -m lifeboat`."""
+    lib = tmp_path / "share" / "lifeboat" / "lib"
+    shutil.copytree(Path(secretscan.__file__).parent, lib / "lifeboat", ignore=shutil.ignore_patterns("__pycache__"))
+    return lib
+
+
+def test_the_hook_blocks_a_manual_push_of_an_aws_key_on_an_install_sh_install_without_lifeboat_on_path(repo, tmp_path, monkeypatch):
+    lib = _install_sh_layout(tmp_path)
+    monkeypatch.setattr(secretscan, "_package_parent", lambda: lib, raising=False)
+    monkeypatch.setattr(secretscan, "_lifeboat_cmd", _REAL_CMD)  # `lifeboat` was not on PATH when the hook was written: which() finds nothing
+    hook = install(repo)
+    assert str(lib) in hook.read_text()
+    head = commit(repo, {"SKILL.md": f"key {AWS}\n"})
+    r = subprocess.run([str(hook), "origin", "x"], input=_push_line(head), capture_output=True, text=True, cwd=repo, env=push_env(on_path=False))
+    assert r.returncode == 1 and "SKILL.md" in r.stderr, r.stderr
+
+
+def test_the_hook_tries_lifeboat_on_path_when_the_command_fixed_at_install_fails_the_probe(repo, monkeypatch):
+    monkeypatch.setattr(secretscan, "_lifeboat_cmd", lambda: [sys.executable, "-I", "-m", "lifeboat"])  # cannot import lifeboat: the probe fails
+    hook = install(repo)
+    head = commit(repo, {"SKILL.md": f"key {AWS}\n"})
+    r = subprocess.run([str(hook), "origin", "x"], input=_push_line(head), capture_output=True, text=True, cwd=repo, env=push_env())
+    assert r.returncode == 1 and "SKILL.md" in r.stderr, r.stderr
+
+
+def test_the_console_script_path_is_preferred_over_the_python_command(monkeypatch):
+    monkeypatch.setattr(secretscan.shutil, "which", lambda name: "/opt/x/bin/lifeboat")
+    assert _REAL_CMD() == ["/opt/x/bin/lifeboat"]

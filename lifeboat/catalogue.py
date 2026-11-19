@@ -35,7 +35,7 @@ AGENT_EXCLUDES = {
 
 # (key, label, group, path relative to home, secret). Dirs first, then single files. Groups "ai" are always secret + links.
 DIRS = (
-    ("claude", "Claude", "ai", ".claude", True), ("codex", "Codex", "ai", ".codex", True),
+    ("claude", "Claude Code", "ai", ".claude", True), ("codex", "Codex", "ai", ".codex", True),
     ("gemini", "Gemini", "ai", ".gemini", True), ("agents", "Agents", "ai", ".agents", True),
     ("cursor", "Cursor", "ai", ".cursor", True), ("cline", "Cline", "ai", ".cline", True),
     ("continue", "Continue", "ai", ".continue", True), ("roo", "Roo", "ai", ".roo", True),

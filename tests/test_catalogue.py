@@ -24,6 +24,7 @@ def test_scan_lists_existing_seed_entries_in_group_order(fake_home):
     claude = got["claude"]
     assert (claude["group"], claude["kind"], claude["secret"], claude["links"], claude["default_on"]) == ("ai", "dir", True, True, True)
     assert claude["path"] == str(fake_home / ".claude")
+    assert claude["label"] == "Claude Code"
     assert "history.jsonl" in claude["exclude"] and ".credentials.json*" in claude["exclude"]
     assert got["zshrc"]["kind"] == "file" and got["zshrc"]["path"] == str(fake_home / ".zshrc") and got["zshrc"]["group"] == "shell"
     assert got["ssh"]["group"] == "keys" and got["ssh"]["secret"] is True

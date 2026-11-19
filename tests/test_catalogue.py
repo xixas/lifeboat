@@ -1,4 +1,8 @@
 import os
+import shutil
+import subprocess
+
+import pytest
 
 from lifeboat import catalogue
 
@@ -25,7 +29,7 @@ def test_scan_lists_existing_seed_entries_in_group_order(fake_home):
     assert (claude["group"], claude["kind"], claude["secret"], claude["links"], claude["default_on"]) == ("ai", "dir", True, True, True)
     assert claude["path"] == str(fake_home / ".claude")
     assert claude["label"] == "Claude Code"
-    assert "history.jsonl" in claude["exclude"] and ".credentials.json*" in claude["exclude"]
+    assert "/history.jsonl" in claude["exclude"] and "/.credentials.json*" in claude["exclude"]
     assert got["zshrc"]["kind"] == "file" and got["zshrc"]["path"] == str(fake_home / ".zshrc") and got["zshrc"]["group"] == "shell"
     assert got["ssh"]["group"] == "keys" and got["ssh"]["secret"] is True
     assert got["cache"]["group"] == "skip" and got["cache"]["default_on"] is False
@@ -83,3 +87,18 @@ def test_scan_reads_the_ignore_list_from_the_config_by_default(fake_home):
     assert by_key(catalogue.scan(fake_home))["claude"]["ignored"] is True
     (fake_home / ".config" / "lifeboat" / "config.toml").write_text("not toml [")
     assert by_key(catalogue.scan(fake_home))["claude"]["ignored"] is False  # a broken config never breaks the scan
+
+
+@pytest.mark.skipif(not shutil.which("rclone"), reason="rclone needed to apply the patterns")
+def test_agent_excludes_only_match_at_the_top_of_the_folder(fake_home):
+    """A skill called debug, logs or state must still be backed up; the agent's own debug/ folder must not."""
+    base = fake_home / ".claude"
+    for rel in ("skills/debug/SKILL.md", "skills/logs/SKILL.md", "plugins/state/x.md", "debug/log.txt", "history.jsonl",
+                "projects/a/chat.jsonl", "skills/mine/notes.jsonl", "settings.json"):
+        (base / rel).parent.mkdir(parents=True, exist_ok=True)
+        (base / rel).write_text("x")
+    item = next(i for i in catalogue.scan(fake_home) if i["key"] == "claude")
+    args = [a for pat in item["exclude"] for a in ("--exclude", pat)]
+    out = subprocess.run(["rclone", "lsf", "-R", "--files-only", str(base), *args], capture_output=True, text=True, check=True).stdout
+    assert sorted(out.split()) == ["plugins/state/x.md", "settings.json", "skills/debug/SKILL.md", "skills/logs/SKILL.md",
+                                   "skills/mine/notes.jsonl"]

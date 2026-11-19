@@ -21,16 +21,17 @@ GROUPS = {
     "other": "Other app settings",
 }
 
-# Agent folders: chat history, logins, caches and live state stay out of the backup.
+# Agent folders: chat history, logins, caches and live state stay out of the backup. Each pattern starts with / so it
+# matches only at the top of the folder: a skill that happens to be called debug must still be backed up.
 AGENT_EXCLUDES = {
-    ".claude": ["projects/**/*.jsonl", "projects/**/tool-results/**", "history.jsonl", "file-history/**", "paste-cache/**",
-                ".credentials.json*", "backups/**", "sessions/**", "session-env/**", "state/**", "cache/**", "debug/**",
-                "logs/**", "shell-snapshots/**", "telemetry/**", "statsig/**", "ide/**", "plugins/cache/**",
-                "plugins/marketplaces/**", "security/**", "todos/**"],
-    ".codex": ["auth.json", "logs_2.sqlite*", "state_5.sqlite*", "models_cache.json", "sessions/**", "shell_snapshots/**",
-               "tmp/**", ".tmp/**"],
-    ".gemini": ["oauth_creds.json", "google_accounts.json", "tmp/**"],
-    ".agents": [".removed-*"],
+    ".claude": ["/projects/**/*.jsonl", "/projects/**/tool-results/**", "/history.jsonl", "/file-history/**", "/paste-cache/**",
+                "/.credentials.json*", "/backups/**", "/sessions/**", "/session-env/**", "/state/**", "/cache/**", "/debug/**",
+                "/logs/**", "/shell-snapshots/**", "/telemetry/**", "/statsig/**", "/ide/**", "/plugins/cache/**",
+                "/plugins/marketplaces/**", "/security/**", "/todos/**"],
+    ".codex": ["/auth.json", "/logs_2.sqlite*", "/state_5.sqlite*", "/models_cache.json", "/sessions/**", "/shell_snapshots/**",
+               "/tmp/**", "/.tmp/**"],
+    ".gemini": ["/oauth_creds.json", "/google_accounts.json", "/tmp/**"],
+    ".agents": ["/.removed-*"],
 }
 
 # (key, label, group, path relative to home, secret). Dirs first, then single files. Groups "ai" are always secret + links.
@@ -76,7 +77,8 @@ LINK_DEPTH = 3
 
 def _pruned(exclude: list[str]) -> set[str]:
     """Top-level folders an exclude list drops whole ('sessions/**'), so the link walk skips them."""
-    return {p[:-3] for p in exclude if p.endswith("/**") and not any(c in p[:-3] for c in "*?[/")}
+    tops = (p.lstrip("/") for p in exclude if p.endswith("/**"))
+    return {t[:-3] for t in tops if not any(c in t[:-3] for c in "*?[/")}
 
 
 def _symlinks(folder: Path, exclude: list[str]):

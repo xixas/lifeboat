@@ -83,40 +83,13 @@ def _risky_name(path: str) -> bool:
     return any(fnmatch.fnmatch(name, p) for p in RISKY_NAMES)
 
 
-_ESCAPES = {"n": "\n", "t": "\t", '"': '"', "\\": "\\", "a": "\a", "b": "\b", "f": "\f", "r": "\r", "v": "\v"}
-
-
-def _diff_path(raw: str) -> str | None:
-    """The file in a `+++ b/<path>` line, or None for /dev/null. Git quotes only names holding a quote, backslash or control character
-    (core.quotePath=false leaves non-ASCII as it is)."""
-    if raw.startswith('"'):
-        raw = re.sub(r"\\(?:([0-7]{3})|(.))", lambda m: chr(int(m.group(1), 8)) if m.group(1) else _ESCAPES.get(m.group(2), m.group(2)), raw[1:-1])
-    return raw[2:] if raw.startswith("b/") else None
-
-
-def _added_lines(diff: str):
-    """Yield (file, line number in the new file, text) for every added line of a unified diff."""
-    file, n = None, 0
-    for raw in diff.splitlines():
-        if raw.startswith("+++ "):
-            file = _diff_path(raw[4:])
-        elif raw.startswith("@@"):
-            m = re.match(r"@@ -\S+ \+(\d+)", raw)
-            n = int(m.group(1)) if m else 0
-        elif file and raw.startswith("+"):
-            yield file, n, raw[1:]
-            n += 1
-        elif file and raw.startswith(" "):
-            n += 1
-
-
 def _gitleaks(repo, base, head) -> list[dict]:
     exe = shutil.which("gitleaks")
     if not exe:
         return []
     with tempfile.TemporaryDirectory() as tmp:
         report = Path(tmp) / "report.json"
-        opts = f"{base}..{head}" if base else head
+        opts = f"{base}..{head}" if base else f"{head} --not --remotes"
         cmd = [exe, "git", f"--log-opts={opts}", "--report-format=json", f"--report-path={report}", "--no-banner", "--redact", "--exit-code=0", str(repo)]
         try:
             subprocess.run(cmd, capture_output=True, text=True, timeout=120, check=False)
@@ -126,49 +99,50 @@ def _gitleaks(repo, base, head) -> list[dict]:
     return [_finding(d.get("File", ""), d.get("StartLine", 0), d.get("RuleID", "gitleaks"), "gitleaks") for d in data]
 
 
-def _history(repo, base: str | None, head: str):
-    """(sha, file, line, text) for every line ANY commit in base..head adds, and (sha, file) for every file such a commit adds
-    or changes. A secret added by one commit and removed by the next is invisible to a diff of the endpoints, but the first
-    commit is still pushed. A merge is read against its first parent, so what a merge resolution adds is seen too."""
-    spec = f"{base}..{head}" if base else head
-    common = ("log", "--no-color", "--no-ext-diff", "--diff-merges=first-parent", "--format=LBCOMMIT:%H")
-    files, sha, status = [], "", None
-    for tok in _git(repo, *common, "-z", "--name-status", "--no-renames", spec).split("\0"):  # -z: names are NUL-separated, never quoted
-        if tok.startswith("LBCOMMIT:"):
-            sha, status = tok[9:], None
-        elif status is None:
-            status = tok.strip() or None
-        else:
-            if status != "D" and sha:
-                files.append((sha, tok))
-            status = None
-    lines, file, n = [], None, 0
-    for raw in _git(repo, *common, "-p", "-U0", spec).splitlines():
-        if raw.startswith("LBCOMMIT:"):
-            sha, file = raw[9:], None
-        elif raw.startswith("+++ "):
-            file = _diff_path(raw[4:])
-        elif raw.startswith("@@"):
-            m = re.match(r"@@ -\S+ \+(\d+)", raw)
-            n = int(m.group(1)) if m else 0
-        elif file and raw.startswith("+"):
-            lines.append((sha, file, n, raw[1:]))
-            n += 1
-    return lines, files
+def _git_bytes(repo, *args: str) -> bytes:
+    r = subprocess.run(["git", "-C", str(repo), *args], capture_output=True, check=False)
+    return r.stdout if r.returncode == 0 else b""
 
 
-def scan_range(repo, base: str | None, head: str = "HEAD") -> list[dict]:
-    """Findings in everything the commits in `base..head` add, one commit at a time (each is `commit`, a short sha). With no base
-    that is the whole history, plus every file tracked at head."""
+def _top(repo) -> str:
+    """The repo's top folder: every path git prints below is relative to it."""
+    return _git(repo, "rev-parse", "--show-toplevel").strip() or str(repo)
+
+
+def _scan_bytes(file: str, data: bytes) -> list[dict]:
+    """Scan a file's whole content, whatever .gitattributes says about it: bytes, decoded with bad bytes replaced."""
+    return _scan_text(file, data.decode("utf-8", errors="replace").split("\n"))
+
+
+def _paths(out: str) -> list[str]:
+    return [p for p in out.split("\0") if p]
+
+
+def _changed(repo, commit: str) -> list[tuple[str, str]]:
+    """(blob sha, path) of every file `commit` adds or changes, a merge read against its first parent so what its resolution adds is seen too."""
+    toks = _git(repo, "diff-tree", "-r", "-z", "--no-renames", "--root", "-m", "--first-parent", "--no-commit-id", commit).split("\0")
+    out = []
+    for meta, path in zip(toks[::2], toks[1::2], strict=False):
+        _old_mode, new_mode, _old, blob, status = meta.lstrip(":").split(" ")[:5]
+        if status[0] != "D" and new_mode != "160000":  # not a deletion, not a submodule
+            out.append((blob, path))
+    return out
+
+
+def scan_range(repo, base: str | None = None, head: str = "HEAD") -> list[dict]:
+    """Findings in the whole content of every file each unpushed commit adds or changes (`head`, minus whatever any remote-tracking
+    ref and `base` already have), one commit at a time (`commit` is a short sha). It never needs to know what the remote holds."""
+    top = _top(repo)
     found: list[dict] = []
-    lines, files = _history(repo, base, head)
-    for sha, file, n, text in lines:
-        found += [{**f, "commit": sha[:7]} for f in _scan_text(file, [text], n)]
-    found += [{**_finding(f, 0, "risky-file-name"), "commit": sha[:7]} for sha, f in files if _risky_name(f)]
-    if not base:
-        for f in filter(None, _git(repo, "ls-tree", "-r", "-z", "--name-only", head).split("\0")):
-            found += _scan_text(f, _git(repo, "show", f"{head}:{f}").splitlines())
-    return _allowed(repo, _dedupe(found + _gitleaks(repo, base, head)))
+    by_blob: dict[str, list[dict]] = {}
+    for sha in _git(top, "rev-list", "--reverse", head, "--not", "--remotes", *([base] if base else [])).split():
+        for blob, path in _changed(top, sha):
+            if blob not in by_blob:
+                by_blob[blob] = _scan_bytes("", _git_bytes(top, "cat-file", "blob", blob))
+            found += [{**f, "file": path, "commit": sha[:7]} for f in by_blob[blob]]
+            if _risky_name(path):
+                found.append({**_finding(path, 0, "risky-file-name"), "commit": sha[:7]})
+    return _allowed(top, _dedupe(found + _gitleaks(top, base, head)))
 
 
 def _dedupe(found: list[dict]) -> list[dict]:
@@ -182,18 +156,23 @@ def _dedupe(found: list[dict]) -> list[dict]:
 
 
 def scan_working_tree(repo) -> list[dict]:
-    """Findings in changes not committed yet: edits to tracked files plus untracked files (what `skillshare push` would commit)."""
-    found = []
-    for file, n, text in _added_lines(_git(repo, "diff", "--no-color", "-U0", "--no-ext-diff", "HEAD")):
-        found += _scan_text(file, [text], n)
-    untracked = _git(repo, "ls-files", "--others", "--exclude-standard", "-z").split("\0")
-    for f in filter(None, untracked):
+    """Findings in changes not committed yet, whole files: what is staged (read from the index, so a file cleaned after `git add` still counts),
+    tracked files edited since, and untracked files that are not ignored (what `skillshare push` would commit)."""
+    top = _top(repo)
+    found, names = [], []
+    for f in _paths(_git(top, "diff", "--cached", "--name-only", "-z", "--diff-filter=ACMRT", "--no-renames")):
+        names.append(f)
+        found += _scan_bytes(f, _git_bytes(top, "cat-file", "blob", f":{f}"))
+    edited = _paths(_git(top, "diff", "--name-only", "-z", "--diff-filter=ACMRT", "--no-renames")) + _paths(_git(top, "ls-files", "--others", "--exclude-standard", "-z"))
+    for f in edited:
+        names.append(f)
+        path = Path(top) / f
         try:
-            found += _scan_text(f, (Path(repo) / f).read_text(errors="replace").splitlines())
+            if path.is_file() and not path.is_symlink():
+                found += _scan_bytes(f, path.read_bytes())
         except OSError:
             pass
-    changed = list(filter(None, _git(repo, "diff", "--name-only", "-z", "HEAD").split("\0"))) + [f for f in untracked if f]
-    return _allowed(repo, _dedupe(found + [_finding(f, 0, "risky-file-name") for f in changed if _risky_name(f)]))
+    return _allowed(top, _dedupe(found + [_finding(f, 0, "risky-file-name") for f in names if _risky_name(f)]))
 
 
 def scan_pre_push(repo, stdin_text: str) -> list[dict]:
@@ -203,7 +182,7 @@ def scan_pre_push(repo, stdin_text: str) -> list[dict]:
         parts = line.split()
         if len(parts) != 4 or parts[1] == ZERO:
             continue  # a deletion pushes nothing
-        found += scan_range(repo, None if parts[3] == ZERO else parts[3], parts[1])
+        found += scan_range(repo, None, parts[1])  # the remote's sha (parts[3]) is not needed, and may not be in this clone
     return found
 
 

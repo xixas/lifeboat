@@ -176,7 +176,7 @@ def run_daily(cfg: Config, gh=None) -> dict | None:
         return _record(result)
     found = secretscan.scan_working_tree(repo)
     if before["last_commit_time"]:
-        found += secretscan.scan_range(repo, _upstream(repo), "HEAD")
+        found += secretscan.scan_range(repo, None, "HEAD")
     if found:
         result["blocked_findings"] = [{k: f[k] for k in ("file", "line", "rule", "commit") if k in f} for f in found]
         out = _git(repo, "rev-parse", "--abbrev-ref", "@{u}")

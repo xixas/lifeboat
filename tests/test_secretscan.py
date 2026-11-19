@@ -69,10 +69,12 @@ def test_clean_commit_passes(repo):
     assert secretscan.scan_range(repo, base, head) == []
 
 
-def test_only_added_lines_count(repo):
+def test_a_changed_file_is_scanned_whole_and_an_already_pushed_commit_is_not(repo):
     old = commit(repo, {"a.txt": f"{AWS}\n"})
     head = commit(repo, {"a.txt": f"{AWS}\nsafe\n"})
-    assert secretscan.scan_range(repo, old, head) == []
+    assert [(f["file"], f["line"], f["commit"]) for f in secretscan.scan_range(repo, old, head)] == [("a.txt", 1, head[:7])]
+    git(repo, "update-ref", "refs/remotes/origin/main", head)  # on the remote already
+    assert secretscan.scan_range(repo, None, head) == []
 
 
 def test_token_in_skill_md_and_aws_blocked(repo):
@@ -396,3 +398,56 @@ def test_a_secret_added_only_in_a_merge_resolution_is_found(repo):
     git(repo, "commit", "-qm", "merge feature")
     head = git(repo, "rev-parse", "HEAD")
     assert ("resolved.txt", "aws-access-key") in {(f["file"], f["rule"]) for f in secretscan.scan_range(repo, base, head)}
+
+
+# ---------------------------------------------------------------- content, not diff text
+def test_a_line_that_starts_with_plus_plus_space_does_not_confuse_the_scan(repo):
+    base = git(repo, "rev-parse", "HEAD")
+    head = commit(repo, {"notes.txt": f"x\n++ b/other.txt\n{AWS}\n"})
+    found = secretscan.scan_range(repo, base, head)
+    assert [(f["file"], f["line"], f["rule"]) for f in found] == [("notes.txt", 3, "aws-access-key")]
+
+
+@pytest.mark.parametrize("attr", ["binary", "-diff", "diff=none"])
+def test_a_file_marked_binary_in_gitattributes_is_still_scanned(repo, attr):
+    base = git(repo, "rev-parse", "HEAD")
+    head = commit(repo, {".gitattributes": f"*.dat {attr}\n", "k.dat": f"line\n{AWS}\n"})
+    assert [(f["file"], f["line"], f["rule"]) for f in secretscan.scan_range(repo, base, head)] == [("k.dat", 2, "aws-access-key")]
+    (repo / "w.dat").write_text(f"{GH}\n")  # and in the working tree
+    assert ("w.dat", "github-token") in {(f["file"], f["rule"]) for f in secretscan.scan_working_tree(repo)}
+
+
+def test_real_binary_content_is_scanned_with_bad_bytes_replaced(repo):
+    base = git(repo, "rev-parse", "HEAD")
+    head = commit(repo, {"a.bin": b"\xff\xfe\x00junk\n".decode("latin-1") + AWS + "\n"})
+    assert [f["rule"] for f in secretscan.scan_range(repo, base, head)] == ["aws-access-key"]
+
+
+def test_a_staged_file_with_no_commit_is_scanned_even_if_the_working_copy_was_cleaned(repo):
+    (repo / "s.txt").write_text(f"{AWS}\n")
+    git(repo, "add", "s.txt")
+    (repo / "s.txt").write_text("clean\n")
+    found = secretscan.scan_working_tree(repo)
+    assert [(f["file"], f["line"], f["rule"]) for f in found] == [("s.txt", 1, "aws-access-key")] and "commit" not in found[0]
+
+
+def test_ignored_untracked_files_are_not_scanned(repo):
+    commit(repo, {".gitignore": "secret.txt\n"})
+    (repo / "secret.txt").write_text(f"{AWS}\n")
+    assert secretscan.scan_working_tree(repo) == []
+
+
+def test_a_force_push_over_a_remote_sha_this_clone_never_fetched_is_still_scanned(repo):
+    commit(repo, {"SKILL.md": f"key {AWS}\n"})
+    commit(repo, {"SKILL.md": "clean\n"})
+    head = git(repo, "rev-parse", "HEAD")
+    unknown = "a" * 40
+    found = secretscan.scan_pre_push(repo, f"refs/heads/main {head} refs/heads/main {unknown}\n")
+    assert [(f["file"], f["rule"]) for f in found] == [("SKILL.md", "aws-access-key")]
+
+
+def test_commits_already_on_a_remote_are_not_scanned_again(repo):
+    commit(repo, {"SKILL.md": f"key {AWS}\n"})
+    git(repo, "update-ref", "refs/remotes/origin/main", "HEAD")
+    head = commit(repo, {"b.md": "fine\n"})
+    assert secretscan.scan_pre_push(repo, f"refs/heads/main {head} refs/heads/main {'0' * 40}\n") == []

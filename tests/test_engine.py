@@ -768,3 +768,51 @@ def test_links_job_round_trips_symlinks_including_dangling(tmp_path, make_cfg, c
     assert (back / "good").is_symlink() and os.readlink(back / "good") == "real.txt"
     assert (back / "dangling").is_symlink() and os.readlink(back / "dangling") == "nowhere.txt"
     assert not (back / "good.rclonelink").exists() and read(back / "real.txt") == "real"
+
+
+def coverage():
+    return json.loads((engine.state_dir() / "coverage.json").read_text())
+
+
+def test_coverage_records_sources_and_include_files_after_a_run(tmp_path, make_cfg, clock):
+    cfg = make_cfg()
+    (tmp_path / "src" / "a").write_text("a")
+    cfg.jobs.append(replace(cfg.jobs[0], name="files", source=str(tmp_path / "src"), include=["/a", "/b"]))
+    engine.run_backup(cfg, now=clock())
+    assert coverage() == {"sources": [str(tmp_path / "src"), f"{tmp_path}/src/a", f"{tmp_path}/src/b"], "dropped": []}
+
+
+def test_a_source_that_disappears_from_the_config_is_reported_dropped_until_acknowledged(tmp_path, make_cfg, clock):
+    cfg = make_cfg()
+    (tmp_path / "src" / "a").write_text("a")
+    cfg.jobs.append(replace(cfg.jobs[0], name="other", source=str(tmp_path / "src2"), dest=f"localdrv:{tmp_path}/dest2"))
+    (tmp_path / "src2").mkdir()
+    (tmp_path / "src2" / "b").write_text("b")
+    engine.run_backup(cfg, now=clock())
+    assert coverage()["dropped"] == []
+    cfg.jobs.pop()
+    engine.run_backup(cfg, now=clock(5))
+    assert coverage() == {"sources": [str(tmp_path / "src")], "dropped": [str(tmp_path / "src2")]}
+    engine.run_backup(cfg, now=clock(9))
+    assert coverage()["dropped"] == [str(tmp_path / "src2")]  # stays until someone acknowledges it
+    st = engine.status(cfg)
+    assert st["dropped"] == [str(tmp_path / "src2")]
+    probs = engine.problems(cfg, st)
+    assert [p["title"] for p in probs] == [f"No longer backed up: {tmp_path}/src2"]
+    engine.ack_dropped()
+    assert coverage()["dropped"] == [] and engine.status(cfg)["dropped"] == []
+    assert engine.problems(cfg, engine.status(cfg)) == []
+
+
+def test_a_dropped_source_that_is_added_back_is_no_longer_dropped(tmp_path, make_cfg, clock):
+    cfg = make_cfg()
+    (tmp_path / "src" / "a").write_text("a")
+    other = replace(cfg.jobs[0], name="other", source=str(tmp_path / "src2"), dest=f"localdrv:{tmp_path}/dest2")
+    (tmp_path / "src2").mkdir()
+    cfg.jobs.append(other)
+    engine.run_backup(cfg, now=clock())
+    cfg.jobs.pop()
+    engine.run_backup(cfg, now=clock(5))
+    cfg.jobs.append(other)
+    engine.run_backup(cfg, now=clock(9))
+    assert coverage()["dropped"] == []

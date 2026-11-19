@@ -90,6 +90,10 @@ def cmd_status(a) -> int:
 
 def cmd_check(a) -> int:
     cfg = _load()
+    if a.ack_dropped:
+        engine.ack_dropped()
+        print("Acknowledged: Lifeboat will stop reminding you about folders that are no longer backed up.")
+        return 0
     probs = engine.problems(cfg, engine.status(cfg))
     if a.json:
         _dump({"problems": probs})
@@ -269,6 +273,7 @@ def parser() -> argparse.ArgumentParser:
     s = sub.add_parser("check", help="notify about problems (used by the timer)")
     s.add_argument("--dry-run", action="store_true", help="print instead of notifying")
     s.add_argument("--json", action="store_true", help="print the problems as JSON; never notifies")
+    s.add_argument("--ack-dropped", action="store_true", help="stop the \"No longer backed up\" reminder; check nothing else")
     s.set_defaults(fn=cmd_check)
     s = sub.add_parser("versions", help="list old versions of a job")
     s.add_argument("job")

@@ -373,7 +373,45 @@ def run_backup(cfg: Config, dry_run: bool = False, now: datetime | None = None, 
             rl.line("", "Finished with problems: " + (f"{plural(failed, 'folder')} not backed up" if failed else
                                                       "the backup list or passphrase check could not be saved"))
     write_json("last-run.json", state)
+    update_coverage(cfg)
     return state
+
+
+# ---------------------------------------------------------------- coverage: what is backed up, and what stopped being
+def coverage_sources(cfg: Config) -> list[str]:
+    """Every folder and single file the jobs cover, as typed in the config (an include job lists its files, not its source)."""
+    out: list[str] = []
+    for j in cfg.jobs:
+        out += [f"{j.source.rstrip('/')}/{pat.lstrip('/')}" for pat in j.include] if j.include else [j.source]
+    return list(dict.fromkeys(out))
+
+
+def _covered(path: str, sources: list[str]) -> bool:
+    return any(path == s or path.startswith(s.rstrip("/") + "/") for s in sources)
+
+
+def update_coverage(cfg: Config) -> dict:
+    """Write coverage.json: the sources now covered, and `dropped`, the ones an earlier run covered that nothing covers any
+    more. A dropped entry stays until acknowledged (ack_dropped) or covered again."""
+    prev = read_json(state_dir() / "coverage.json") or {}
+    sources = coverage_sources(cfg)
+    before = [s for s in prev.get("sources", []) if isinstance(s, str)]
+    dropped = [s for s in prev.get("dropped", []) if isinstance(s, str)] + [s for s in before if not _covered(s, sources)]
+    doc = {"sources": sources, "dropped": [s for s in dict.fromkeys(dropped) if not _covered(s, sources)]}
+    write_json("coverage.json", doc)
+    return doc
+
+
+def dropped_sources() -> list[str]:
+    dropped = (read_json(state_dir() / "coverage.json") or {}).get("dropped", [])
+    return [s for s in dropped if isinstance(s, str)]
+
+
+def ack_dropped() -> None:
+    """Forget the dropped sources, so `lifeboat check` stops notifying about them."""
+    doc = read_json(state_dir() / "coverage.json")
+    if isinstance(doc, dict):
+        write_json("coverage.json", {**doc, "dropped": []})
 
 
 # ---------------------------------------------------------------- versions, prune, restore
@@ -511,7 +549,7 @@ def status(cfg: Config) -> dict:
          "last_age_days": age_days((last or {}).get("time")), "jobs": jobs,
          "settings": {"enabled": bool(cfg.settings_command), "command": cfg.settings_command,
                       "last": read_json(sd / "settings.json"), "log": tail(sd / "run.log", 20)},
-         "prune": read_json(sd / "prune.json"), "timers": timers(), "skills": None}
+         "prune": read_json(sd / "prune.json"), "timers": timers(), "skills": None, "dropped": dropped_sources()}
     if cfg.skills_enabled:
         from lifeboat.skills import skills
         d["skills"] = skills()
@@ -577,6 +615,9 @@ def problems(cfg: Config, st: dict) -> list[dict]:
     if any(st[k] and not st[k]["ok"] for k in ("manifest", "probe")):
         out.append({"page": "backups", "title": "Restore discovery is broken", "urgent": True,
                     "body": "Restore on a new laptop would not find this backup: the device manifest or passphrase probe could not be written."})
+    if st["dropped"]:
+        out.append({"page": "backups", "title": "No longer backed up: " + ", ".join(st["dropped"]), "urgent": True,
+                    "body": "These were backed up before and no job covers them now. Add them back, or acknowledge to stop this reminder."})
     snap = st["settings"]["last"]
     if st["settings"]["enabled"] and snap and not snap.get("ok"):
         out.append({"page": "settings", "title": "Settings snapshot failed",

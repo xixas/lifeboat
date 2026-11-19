@@ -293,3 +293,16 @@ def test_run_events_done_is_false_when_a_job_fails(env, make_cfg, capsys):
     assert cli.main(["run", "--events"]) == 1
     events = [json.loads(ln) for ln in capsys.readouterr().out.splitlines()]
     assert events[1]["rc"] == 2 and "refusing to sync" in events[1]["error"] and events[-1] == {"event": "done", "ok": False}
+
+
+def test_check_reports_dropped_sources_until_ack_dropped(env, make_cfg, capsys):
+    write_cfg(env, make_cfg)
+    (env / "src" / "f").write_text("1")
+    engine.write_json("coverage.json", {"sources": [str(env / "src")], "dropped": ["/old/place"]})
+    assert cli.main(["check", "--dry-run"]) == 0
+    assert "No longer backed up: /old/place" in capsys.readouterr().out
+    assert cli.main(["check", "--ack-dropped"]) == 0
+    assert "acknowledged" in capsys.readouterr().out.lower()
+    assert engine.dropped_sources() == []
+    assert cli.main(["check", "--dry-run"]) == 0
+    assert "No longer backed up" not in capsys.readouterr().out

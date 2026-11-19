@@ -4,7 +4,7 @@ from datetime import datetime, timedelta
 
 import pytest
 
-from lifeboat import engine
+from lifeboat import engine, setup
 from lifeboat.config import parse
 
 if not shutil.which("rclone"):
@@ -48,3 +48,13 @@ def clock():
 
 def stamps(old_dir):
     return sorted(p.name for p in old_dir.iterdir() if engine.STAMP_RE.match(p.name)) if old_dir.exists() else []
+
+
+@pytest.fixture
+def fake_home(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(home / ".config"))
+    monkeypatch.setattr(setup, "_glib_user_dir", lambda name: None)  # force the user-dirs.dirs / defaults path
+    return home

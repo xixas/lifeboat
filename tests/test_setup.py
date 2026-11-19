@@ -411,23 +411,13 @@ def test_parse_user_dirs_reads_home_relative_and_absolute_paths():
     assert setup.parse_user_dirs(text, "/home/u") == {"DOCUMENTS": "/home/u/Docs", "MUSIC": "/data/music", "VIDEOS": "/home/u"}
 
 
-@pytest.fixture
-def fake_home(tmp_path, monkeypatch):
-    home = tmp_path / "home"
-    home.mkdir()
-    monkeypatch.setenv("HOME", str(home))
-    monkeypatch.setenv("XDG_CONFIG_HOME", str(home / ".config"))
-    monkeypatch.setattr(setup, "_glib_user_dir", lambda name: None)  # force the user-dirs.dirs / defaults path
-    return home
-
-
 def test_suggest_folders_falls_back_to_defaults_and_lists_only_existing(fake_home):
     for d in ("Documents", "Pictures", ".ssh"):
         (fake_home / d).mkdir()
     got = {f["key"]: f for f in setup.suggest_folders()}
     assert list(got) == ["documents", "pictures", "ssh"]
     assert got["documents"] == {"key": "documents", "label": "Documents", "path": str(fake_home / "Documents"),
-                                "default_on": True, "secret": False}
+                                "default_on": True, "secret": False, "group": "files", "kind": "dir", "exclude": [], "links": False}
     assert got["ssh"]["secret"] is True and got["ssh"]["path"] == str(fake_home / ".ssh") and got["ssh"]["default_on"] is True
 
 

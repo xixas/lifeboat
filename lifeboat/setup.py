@@ -17,7 +17,7 @@ import time
 import weakref
 from pathlib import Path
 
-from lifeboat import engine
+from lifeboat import catalogue, engine
 from lifeboat.config import (
     NAME_RE,
     TIME_RE,
@@ -340,8 +340,8 @@ def parse_user_dirs(text: str, home: str) -> dict[str, str]:
     return out
 
 
-def _xdg_dirs() -> dict[str, str]:
-    home = str(Path.home())
+def _xdg_dirs(home: str | os.PathLike | None = None) -> dict[str, str]:
+    home = str(home or Path.home())
     conf = Path(os.environ.get("XDG_CONFIG_HOME") or Path(home) / ".config") / "user-dirs.dirs"
     try:
         parsed = parse_user_dirs(conf.read_text(errors="replace"), home)
@@ -350,17 +350,17 @@ def _xdg_dirs() -> dict[str, str]:
     return {name: _glib_user_dir(name) or parsed.get(name) or os.path.join(home, default) for name, default in XDG_FOLDERS}
 
 
+def standard_folders(home: str | os.PathLike) -> list[tuple[str, str, str]]:
+    """(XDG name, label, path) of the standard folders (Documents ...) that exist. The home folder itself (what GLib
+    returns for an unset Desktop) is never one of them."""
+    dirs = _xdg_dirs(home)
+    return [(name, label, dirs[name]) for name, label in XDG_FOLDERS if dirs[name] != str(home) and os.path.isdir(dirs[name])]
+
+
 def suggest_folders() -> list[dict]:
-    """Folders worth backing up that exist on this laptop: {key, label, path, default_on, secret}. Sizes come from
-    folder_size()/with_size(), so this stays instant. The home folder itself (what GLib returns for an unset
-    Desktop) is never suggested."""
-    home = str(Path.home())
-    dirs = _xdg_dirs()
-    out = [{"key": name.lower(), "label": label, "path": dirs[name], "default_on": True, "secret": False}
-           for name, label in XDG_FOLDERS if dirs[name] != home and os.path.isdir(dirs[name])]
-    out += [{"key": key, "label": label, "path": os.path.join(home, rel), "default_on": True, "secret": True}
-            for key, label, rel in SECRET_FOLDERS if os.path.isdir(os.path.join(home, rel))]
-    return out
+    """What is worth backing up on this laptop, as catalogue.scan() items. Sizes come from folder_size()/with_size(),
+    so this stays instant."""
+    return catalogue.scan(Path.home())
 
 
 def folder_size(path: str | os.PathLike, limit_s: float = 10) -> tuple[int, bool]:

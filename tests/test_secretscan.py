@@ -163,3 +163,24 @@ def test_working_tree_scan_covers_modified_and_untracked(repo):
     assert {(f["file"], f["rule"]) for f in found} == {("README.md", "aws-access-key"), ("new/SKILL.md", "github-token"), (".env", "risky-file-name")}
     git(repo, "checkout", "--", "README.md")
     assert {f["file"] for f in secretscan.scan_working_tree(repo)} == {"new/SKILL.md", ".env"}
+
+
+def test_a_secret_added_and_removed_in_later_commits_is_still_found(repo):
+    """A adds a key, B removes it: the net diff is clean, but A would be pushed."""
+    base = git(repo, "rev-parse", "HEAD")
+    commit(repo, {"skills/x/SKILL.md": f"key {AWS}\n"})
+    a = git(repo, "rev-parse", "HEAD")
+    commit(repo, {"skills/x/SKILL.md": "clean\n"})
+    head = git(repo, "rev-parse", "HEAD")
+    found = secretscan.scan_range(repo, base, head)
+    assert [(f["file"], f["line"], f["rule"], f["commit"]) for f in found] == [("skills/x/SKILL.md", 1, "aws-access-key", a[:7])]
+    assert AWS not in str(found)
+
+
+def test_a_risky_file_added_then_deleted_is_still_found(repo):
+    base = git(repo, "rev-parse", "HEAD")
+    commit(repo, {".env": "harmless\n"})
+    git(repo, "rm", "-q", ".env")
+    git(repo, "commit", "-qm", "rm")
+    found = secretscan.scan_range(repo, base, "HEAD")
+    assert [(f["file"], f["rule"]) for f in found] == [(".env", "risky-file-name")]

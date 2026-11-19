@@ -146,7 +146,9 @@ def run_daily(cfg: Config, gh=None, binary: Path | str | None = None) -> dict | 
     if before["last_commit_time"]:
         found += secretscan.scan_range(repo, _upstream(repo), "HEAD")
     if found:
-        result["blocked_findings"] = [{k: f[k] for k in ("file", "line", "rule")} for f in found]
+        result["blocked_findings"] = [{k: f[k] for k in ("file", "line", "rule", "commit") if k in f} for f in found]
+        out = _git(repo, "rev-parse", "--abbrev-ref", "@{u}")
+        result["repo"], result["upstream"] = str(repo), (out or "").strip() or None
         return _record(result)
     if not before["dirty_count"] and not before["ahead"]:
         result["ok"] = True

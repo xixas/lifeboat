@@ -611,12 +611,21 @@ def _verdict(d: dict) -> None:
     d["verdict"] = {"title": title, "weakest": weakest}
 
 
+def _blocked_body(last: dict) -> str:
+    commit = next((f["commit"] for f in last["blocked_findings"] if f.get("commit")), None)
+    if not commit:
+        return "Remove the secret from the store folder; nothing was pushed to GitHub."
+    fix = (f"git -C {last['repo']} reset --soft {last['upstream']}, then remove the secret and commit again."
+           if last.get("repo") and last.get("upstream") else "rewrite that commit without the secret.")
+    return f"The secret is in unpushed commit {commit}, so it would reach GitHub even if a later commit removes it. Fix: {fix} Nothing was pushed."
+
+
 def _store_problems(last: dict | None) -> list[dict]:
     if not last or last.get("ok"):
         return []
     if last.get("blocked_findings"):
         return [{"page": "store", "title": "Config store push blocked: secret found in " + last["blocked_findings"][0]["file"], "urgent": True,
-                 "body": "Remove the secret from the store folder; nothing was pushed to GitHub."}]
+                 "body": _blocked_body(last)}]
     days = int(age_days(last.get("last_ok_time") or last.get("time")) or 0)
     title = f"Config store not pushed for {days} days" if days else "Config store push failed"
     return [{"page": "store", "title": title, "body": last.get("error") or "The last push did not complete.", "urgent": days >= STALE_DAYS}]

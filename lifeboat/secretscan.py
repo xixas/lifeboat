@@ -85,18 +85,45 @@ def _gitleaks(repo, base, head) -> list[dict]:
     return [_finding(d.get("File", ""), d.get("StartLine", 0), d.get("RuleID", "gitleaks"), "gitleaks") for d in data]
 
 
+def _history(repo, base: str | None, head: str):
+    """(sha, file, line, text) for every line ANY commit in base..head adds, and (sha, file) for every file such a commit adds
+    or changes. A secret added by one commit and removed by the next is invisible to a diff of the endpoints, but the first
+    commit is still pushed."""
+    out = _git(repo, "log", "--no-color", "-p", "-U0", "--no-ext-diff", "--format=LBCOMMIT:%H", f"{base}..{head}" if base else head)
+    sha, file, n, lines, files = "", None, 0, [], []
+    pending_file = None
+    for raw in out.splitlines():
+        if raw.startswith("LBCOMMIT:"):
+            sha, file, pending_file = raw[9:], None, None
+        elif raw.startswith("diff --git "):
+            m = re.match(r"diff --git a/.* b/(.*)$", raw)
+            pending_file = m.group(1) if m else None
+            if pending_file:
+                files.append((sha, pending_file))
+        elif raw.startswith("deleted file mode") and pending_file:
+            files.remove((sha, pending_file))
+        elif raw.startswith("+++ "):
+            file = raw[6:] if raw.startswith("+++ b/") else None
+        elif raw.startswith("@@"):
+            m = re.match(r"@@ -\S+ \+(\d+)", raw)
+            n = int(m.group(1)) if m else 0
+        elif file and raw.startswith("+"):
+            lines.append((sha, file, n, raw[1:]))
+            n += 1
+    return lines, files
+
+
 def scan_range(repo, base: str | None, head: str = "HEAD") -> list[dict]:
-    """Findings in what `base..head` adds; with no base, in every file tracked at head."""
+    """Findings in everything the commits in `base..head` add, one commit at a time (each is `commit`, a short sha). With no base
+    that is the whole history, plus every file tracked at head."""
     found: list[dict] = []
-    if base:
-        for file, n, text in _added_lines(_git(repo, "diff", "--no-color", "-U0", "--no-ext-diff", f"{base}..{head}")):
-            found += _scan_text(file, [text], n)
-        files = _git(repo, "diff", "--name-only", "--diff-filter=AMR", f"{base}..{head}").splitlines()
-    else:
-        files = _git(repo, "ls-tree", "-r", "--name-only", head).splitlines()
-        for f in files:
+    lines, files = _history(repo, base, head)
+    for sha, file, n, text in lines:
+        found += [{**f, "commit": sha[:7]} for f in _scan_text(file, [text], n)]
+    found += [{**_finding(f, 0, "risky-file-name"), "commit": sha[:7]} for sha, f in files if _risky_name(f)]
+    if not base:
+        for f in _git(repo, "ls-tree", "-r", "--name-only", head).splitlines():
             found += _scan_text(f, _git(repo, "show", f"{head}:{f}").splitlines())
-    found += [_finding(f, 0, "risky-file-name") for f in files if _risky_name(f)]
     return _dedupe(found + _gitleaks(repo, base, head))
 
 

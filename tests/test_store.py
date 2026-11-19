@@ -340,3 +340,21 @@ def test_connect_remote_adds_origin_and_an_upstream_for_the_current_branch(tmp_p
     assert _git(repo, "config", "branch.main.merge").strip() == "refs/heads/main"
     store.connect_remote(repo, "https://github.com/xixas/other.git")  # an existing origin is left alone
     assert "skillshare-source" in _git(repo, "remote", "get-url", "origin")
+
+
+def test_a_secret_in_an_unpushed_commit_blocks_even_if_the_next_commit_removes_it(source, tmp_path):
+    (source / "SKILL.md").write_text(f"key {AWS}\n")
+    _git(source, "add", "-A")
+    _git(source, "commit", "-qm", "oops")
+    sha = _git(source, "rev-parse", "--short=7", "HEAD").strip()
+    (source / "SKILL.md").write_text("clean\n")
+    _git(source, "commit", "-qam", "fix")
+    log = tmp_path / "ss.log"
+    cfg = _cfg(source)
+    r = store.run_daily(cfg, gh=NoToken(), binary=_skillshare_push(tmp_path, log))
+    assert r["ok"] is False and r["pushed"] is False and not log.exists()
+    assert [(f["file"], f["commit"]) for f in r["blocked_findings"]] == [("SKILL.md", sha)] and AWS not in str(r)
+    probs = store.engine.problems(cfg, engine_status(cfg))
+    body = next(p["body"] for p in probs if p["page"] == "store")
+    assert f"unpushed commit {sha}" in body
+    assert f"git -C {source} reset --soft origin/main" in body and "commit again" in body

@@ -102,3 +102,12 @@ def test_agent_excludes_only_match_at_the_top_of_the_folder(fake_home):
     out = subprocess.run(["rclone", "lsf", "-R", "--files-only", str(base), *args], capture_output=True, text=True, check=True).stdout
     assert sorted(out.split()) == ["plugins/state/x.md", "settings.json", "skills/debug/SKILL.md", "skills/logs/SKILL.md",
                                    "skills/mine/notes.jsonl"]
+
+
+def test_vscode_is_encrypted_and_leaves_out_extension_state_and_history(fake_home):
+    mk(fake_home, ".config/Code/User", ".cursor", ".continue")
+    got = by_key(catalogue.scan(fake_home))
+    assert got["vscode"]["secret"] is True and got["vscode"]["default_on"] is True
+    assert {"/workspaceStorage/**", "/globalStorage/**", "/History/**"} <= set(got["vscode"]["exclude"])
+    assert "/extensions/**" in got["cursor"]["exclude"]
+    assert {"/index/**", "/sessions/**", "/dev_data/**"} <= set(got["continue"]["exclude"])

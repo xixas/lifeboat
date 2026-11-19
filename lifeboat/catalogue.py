@@ -32,6 +32,9 @@ AGENT_EXCLUDES = {
                "/tmp/**", "/.tmp/**"],
     ".gemini": ["/oauth_creds.json", "/google_accounts.json", "/tmp/**"],
     ".agents": ["/.removed-*"],
+    ".cursor": ["/extensions/**"],
+    ".continue": ["/index/**", "/sessions/**", "/dev_data/**"],
+    "User": ["/workspaceStorage/**", "/globalStorage/**", "/History/**"],  # VS Code: extension chat state and edit history
 }
 
 # (key, label, group, path relative to home, secret). Dirs first, then single files. Groups "ai" are always secret + links.
@@ -48,7 +51,7 @@ DIRS = (
     ("atuin", "Atuin", "shell", ".config/atuin", True),
     ("git", "Git", "dev", ".config/git", False), ("gh", "GitHub CLI", "dev", ".config/gh", True),
     ("uv", "uv", "dev", ".config/uv", False),
-    ("vscode", "VS Code settings", "editors", ".config/Code/User", False), ("nvim", "Neovim", "editors", ".config/nvim", False),
+    ("vscode", "VS Code settings", "editors", ".config/Code/User", True), ("nvim", "Neovim", "editors", ".config/nvim", False),
     ("autostart", "Autostart", "desktop", ".config/autostart", False), ("gtk-4.0", "GTK 4", "desktop", ".config/gtk-4.0", False),
     ("gtk-3.0", "GTK 3", "desktop", ".config/gtk-3.0", False),
     ("ssh", "SSH keys", "keys", ".ssh", True), ("gnupg", "GPG keys", "keys", ".gnupg", True),

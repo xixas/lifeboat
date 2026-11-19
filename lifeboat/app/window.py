@@ -10,6 +10,7 @@ gi.require_version("Adw", "1")
 from gi.repository import Adw, Gio, GLib, Gtk  # noqa: E402
 
 from lifeboat import APP_ID, catalogue, engine, found, skills  # noqa: E402
+from lifeboat.app import store_page  # noqa: E402
 from lifeboat.app.found import FoundDialog  # noqa: E402
 from lifeboat.app.pages import PAGE_ICONS, PAGE_NAMES, PagesMixin  # noqa: E402
 from lifeboat.app.progress import BackupProgress, plan  # noqa: E402
@@ -40,6 +41,7 @@ def gather() -> dict:
         d["dropped_items"] = found.match_dropped(st["dropped"], items)
     except OSError as e:
         print("scan failed:", e, file=sys.stderr)
+    d["store"] = store_page.gather_store(cfg)
     if st["skills"] is not None:
         d["skills_cover"] = skills.coverage(cfg, st["last"], st["skills"]["own"], items)
     return d
@@ -102,6 +104,7 @@ class Win(PagesMixin, Adw.ApplicationWindow):
             ids.append("settings")
         if self.st["skills"] is not None:
             ids.append("skills")
+        ids.append("store")
         return ids + ["help", "prefs"]
 
     def set_pages(self, ids):

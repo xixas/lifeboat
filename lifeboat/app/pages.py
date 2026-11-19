@@ -10,6 +10,7 @@ gi.require_version("Adw", "1")
 from gi.repository import Adw, GLib, Gtk  # noqa: E402
 
 from lifeboat import APP_ID, engine, found, timer  # noqa: E402
+from lifeboat.app.store_page import StoreMixin  # noqa: E402
 from lifeboat.app.widgets import CSS, ICONS, WORDS, ago, fmt_time, group, label, row  # noqa: E402
 from lifeboat.app.wizard_state import tilde  # noqa: E402
 from lifeboat.config import example_config_path, load_config  # noqa: E402
@@ -18,13 +19,13 @@ from lifeboat.config import example_config_path, load_config  # noqa: E402
 SKILLS_CLI = "skills@1.7.4"
 
 PAGE_ICONS = {"overview": "go-home-symbolic", "backups": "folder-remote-symbolic", "restore": "document-revert-symbolic",
-              "settings": "document-save-symbolic", "skills": "starred-symbolic", "help": "help-about-symbolic",
+              "settings": "document-save-symbolic", "skills": "starred-symbolic", "store": "folder-publicshare-symbolic", "help": "help-about-symbolic",
               "prefs": "emblem-system-symbolic"}
 PAGE_NAMES = {"overview": "Overview", "backups": "Backups", "restore": "Restore", "settings": "Settings snapshot",
-              "skills": "Skills", "help": "How it works", "prefs": "Preferences"}
+              "skills": "Skills", "store": "Config store", "help": "How it works", "prefs": "Preferences"}
 
 
-class PagesMixin:
+class PagesMixin(StoreMixin):
     def status_row(self, title, detail, st):
         return row(title, detail, [label(WORDS[st], CSS[st])], ICONS[st])
 
@@ -91,6 +92,10 @@ class PagesMixin:
             if any(i is not None for _p, i in dropped):
                 r.add_suffix(self.button("Add back", self.add_back_dropped, ("flat",), False))
             r.add_suffix(self.button("Dismiss", self.dismiss_dropped, ("flat",), False))
+            out.append(r)
+        for p in (p for p in engine.problems(self.cfg, self.st) if p["page"] == "store"):
+            r = row(p["title"], p["body"], icon=ICONS["warn"])
+            r.add_suffix(self.button("Open", lambda: self.show_page("store"), ("flat",), False))
             out.append(r)
         if (new := self.data["new_items"]):
             r = row(f"{len(new)} new item{'s' if len(new) != 1 else ''} found", ", ".join(i["label"] for i in new[:4]) +

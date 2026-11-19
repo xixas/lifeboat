@@ -39,7 +39,7 @@ cfg.parent.mkdir(parents=True)
 cfg.write_text(sys.argv[2])
 win.apply(gather())
 assert win.data["kind"] == "ok"
-assert win.page_ids() == ["overview", "backups", "restore", "help", "prefs"], win.page_ids()
+assert win.page_ids() == ["overview", "backups", "restore", "store", "help", "prefs"], win.page_ids()
 for pid in win.page_ids():
     win.show_page(pid)
 '''
@@ -1358,7 +1358,108 @@ shot("14-skills-backed-up", win.get_content())
 print("SKILLS OK")
 '''
 
+STORE_BODY = r'''
+import subprocess
+from lifeboat import config, engine, store, store_install, github
+from lifeboat.app import store_page
+HOME = Path(sys.argv[1])
+cfg_path = config.config_path()
+docs_choice = {"key": "documents", "label": "Documents", "path": str(HOME / "Documents"), "secret": False}
+setup._write_new_config(cfg_path, "laptop", "13:00", setup.wizard_jobs("laptop", [docs_choice]))
+repo = HOME / "projects" / "claude-config"
+repo.mkdir(parents=True)
+subprocess.run(["git", "init", "-q", "-b", "main", str(repo)], check=True)
+
+class FakeGH:
+    signed = False
+    def signed_in(self): return FakeGH.signed
+    def start_device_flow(self):
+        return {"device_code": "dc", "user_code": "K7QF-2M9D", "verification_uri": "https://github.com/login/device", "interval": 0}
+    def poll_token(self, dc):
+        FakeGH.signed = True
+        return {"status": "ok"}
+    def installation_repos(self):
+        return [{"full_name": "xixas/skillshare-source", "clone_url": "https://github.com/xixas/skillshare-source.git", "private": True}]
+    def sign_out(self): FakeGH.signed = False; calls.append(("signout",))
+    def token(self): return None
+
+store_page.GITHUB = FakeGH
+store_page.POLL_SLEEP = lambda s: None
+store_install.skillshare_path = lambda: None
+installed = []
+store_install.install = lambda dest_dir=None: installed.append(1)
+store.candidates = lambda items: [{"path": str(repo), "name": "claude-config", "skills": 37}]
+store.prepare = lambda r, binary=None, home=None: {"ok": True, "error": "", "source": str(r or HOME / ".config" / "skillshare")}
+win = Win(None)
+win.present()
+win.open_url = lambda u: calls.append(("url", u))
+win.apply(gather())
+assert win.page_ids()[-3:] == ["store", "help", "prefs"], win.page_ids()
+win.show_page("store")
+assert "Keep your skills on GitHub" in labels(win) and "Set up" in [b.get_label() for b in buttons(win)]
+shot("60-store-not-set-up", win.get_content())
+
+# a failed install (hash mismatch) stops with the reason
+def bad(dest_dir=None): raise store_install.InstallError("checksum mismatch: refusing to install")
+store_install.install = bad
+dlg = store_page.StoreSetup(win)
+dlg.present(win)
+assert pump(lambda: any("checksum mismatch" in t for t in labels(dlg.get_child()))), labels(dlg.get_child())
+assert dlg.nav.get_visible_page().get_tag() == "install"
+shot("61-store-install-failed", dlg.get_child())
+dlg.force_close()
+pump(timeout=0.3)
+
+store_install.install = lambda dest_dir=None: installed.append(1)
+dlg = store_page.StoreSetup(win)
+dlg.present(win)
+tagd = lambda: dlg.nav.get_visible_page().get_tag()
+assert pump(lambda: tagd() == "pick"), tagd()
+assert installed == [1]
+assert any("claude-config · 37 skills" in t for t in labels(dlg.get_child())), labels(dlg.get_child())
+shot("62-store-pick", dlg.get_child())
+click(dlg.get_child(), "Continue")
+assert pump(lambda: tagd() == "connect"), tagd()
+assert not [b for b in buttons(dlg.get_child()) if b.get_label() == "Sign in" and b.get_sensitive()]  # needs the repo URL first
+shot("63-store-connect", dlg.get_child())
+click(dlg.get_child(), "Create repo on GitHub")
+assert ("url", github.new_repo_url()) in calls
+dlg.url_row.set_text("not a url")
+assert dlg.url_row.has_css_class("error") and not dlg.signin_btn.get_sensitive()
+dlg.url_row.set_text("https://github.com/xixas/skillshare-source")
+assert dlg.signin_btn.get_sensitive()
+shot("64-store-connect-filled", dlg.get_child())
+click(dlg.get_child(), "Install Lifeboat on it")
+assert ("url", github.install_url()) in calls
+click(dlg.get_child(), "Sign in")
+assert pump(lambda: tagd() in ("code", "done")), tagd()
+assert ("url", "https://github.com/login/device") in calls
+assert pump(lambda: tagd() == "done"), tagd()
+cfg2 = config.load_config(cfg_path)
+assert (cfg2.store_source, cfg2.store_push) == ("~/projects/claude-config", True), (cfg2.store_source, cfg2.store_push)
+assert "xixas/skillshare-source" in subprocess.run(["git", "-C", str(repo), "remote", "get-url", "origin"], capture_output=True, text=True).stdout
+shot("66-store-done", dlg.get_child())
+click(dlg.get_child(), "Done")
+pump(timeout=0.5)
+
+win.apply(gather())
+win.show_page("store")
+assert "Push now" in [b.get_label() for b in buttons(win)] and "Sign out" in [b.get_label() for b in buttons(win)]
+click(win, "Sign out")
+assert pump(lambda: ("signout",) in calls)
+engine.write_json("store.json", {"time": datetime.now(timezone.utc).isoformat(), "ok": False, "pushed": False, "error": "",
+                                 "blocked_findings": [{"file": "skills/x/.env", "line": 3, "rule": "aws-access-key"}], "last_ok_time": None})
+win.apply(gather())
+win.show_page("overview")
+assert any(t.startswith("Config store push blocked") for t in labels(win)), labels(win)
+click(win, "Open")  # a store problem on Overview leads to the store page
+assert win.page == "store"
+assert "skills/x/.env:3:aws-access-key" in labels(win), labels(win)
+print("STORE OK")
+'''
+
 WIZARD_SCRIPT = PRELUDE + SETUP_BODY
+STORE_SCRIPT = PRELUDE + STORE_BODY
 SKILLS_SCRIPT = PRELUDE + SKILLS_BODY
 OVERVIEW_SCRIPT = PRELUDE + OVERVIEW_BODY
 FOUND_SCRIPT = PRELUDE + FOUND_BODY
@@ -1416,3 +1517,7 @@ def test_overview_alerts_for_dropped_and_new_items(env):
 
 def test_skills_page_says_whether_your_skills_are_backed_up(env):
     run_broadway(env, SKILLS_SCRIPT, "SKILLS OK")
+
+
+def test_config_store_page_and_setup_dialog(env):
+    run_broadway(env, STORE_SCRIPT, "STORE OK")

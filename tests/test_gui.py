@@ -1461,6 +1461,11 @@ pump(timeout=0.5)
 win.apply(gather())
 win.show_page("store")
 assert "Push now" in [b.get_label() for b in buttons(win)] and "Sign out" in [b.get_label() for b in buttons(win)]
+pushes = []
+store.run_daily = lambda *a, **kw: (_ for _ in ()).throw(AssertionError("Push now must not push in the app's own process"))
+store.push_in_subprocess = lambda: (pushes.append(1), {"ok": True, "pushed": True, "blocked_findings": [], "error": ""})[1]
+click(win, "Push now")
+assert pump(lambda: pushes), pushes
 click(win, "Sign out")
 assert pump(lambda: ("signout",) in calls)
 FakeGH.signed = False  # signed out: the page offers Sign in, and the dialog goes straight to the GitHub step

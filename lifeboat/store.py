@@ -2,10 +2,12 @@
 Lifeboat never runs `skillshare sync`: only init, status, push and ui."""
 from __future__ import annotations
 
+import json
 import os
 import re
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 from lifeboat import engine, github, secretscan, store_install
@@ -158,6 +160,18 @@ def _push(repo: Path, gh) -> dict:
         gh.sign_out()  # the token no longer works: say so instead of failing the same way every day
         return {**out, "signed_out": "GitHub access was revoked"}
     return out
+
+
+def push_in_subprocess(timeout: int = 300) -> dict:
+    """What the app's Push now runs: `lifeboat store-push` in its own process, whose main thread cleans the token file up on SIGTERM or
+    SIGHUP (an app thread cannot install signal handlers). Returns the run's store.json record, or a failed one."""
+    failed = {"ok": False, "pushed": False, "blocked_findings": [], "error": "the push did not complete", "signed_out": ""}
+    try:
+        r = subprocess.run([sys.executable, "-m", "lifeboat", "store-push", "--json"], capture_output=True, text=True, timeout=timeout, check=False)
+        doc = json.loads(r.stdout)
+    except (OSError, subprocess.TimeoutExpired, ValueError):
+        return failed
+    return doc if isinstance(doc, dict) else failed
 
 
 def clear_signed_out() -> None:

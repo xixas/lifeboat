@@ -339,3 +339,37 @@ def test_add_job_links_flag_writes_the_links_key(env, make_cfg):
     (env / "notes").mkdir()
     assert cli.main(["add-job", "notes", str(env / "notes"), "localdrv:Backup/notes", "--links"]) == 0
     assert load_config(cfg.path).jobs[1].links is True
+
+
+def test_startup_deletes_stale_token_files_for_the_cli_and_the_app(env, tmp_path, monkeypatch):
+    import os
+    import time
+    runtime = tmp_path / "run"
+    runtime.mkdir()
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(runtime))
+    stale = runtime / "lifeboat-gh-token-left"
+    stale.write_text("x")
+    old = time.time() - 3600
+    os.utime(stale, (old, old))
+    assert cli.main(["secret-scan", "--probe"]) == 0
+    assert not stale.exists()
+    stale.write_text("x")
+    os.utime(stale, (old, old))
+    monkeypatch.setattr("lifeboat.app.main", lambda argv: 0)  # the window itself is not opened here
+    assert cli.main([]) == 0
+    assert not stale.exists()
+
+
+def test_store_push_runs_the_daily_push_and_prints_the_result_as_json(env, make_cfg, capsys, monkeypatch):
+    write_cfg(env, make_cfg)
+    from lifeboat import store
+    result = {"time": "t", "ok": True, "pushed": True, "blocked_findings": [], "error": "", "signed_out": ""}
+    monkeypatch.setattr(store, "run_daily", lambda cfg, gh=None: result)
+    assert cli.main(["store-push", "--json"]) == 0
+    assert json.loads(capsys.readouterr().out) == result
+    monkeypatch.setattr(store, "run_daily", lambda cfg, gh=None: {**result, "ok": False, "pushed": False, "error": "boom"})
+    assert cli.main(["store-push", "--json"]) == 1
+    assert json.loads(capsys.readouterr().out)["error"] == "boom"
+    monkeypatch.setattr(store, "run_daily", lambda cfg, gh=None: None)  # no store set up
+    assert cli.main(["store-push", "--json"]) == 1
+    assert json.loads(capsys.readouterr().out)["ok"] is False

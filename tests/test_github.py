@@ -402,3 +402,35 @@ def test_the_signal_handlers_are_restored_after_a_push(tmp_path, monkeypatch, fa
     before = (signal.getsignal(signal.SIGTERM), signal.getsignal(signal.SIGHUP))
     github.push(mkrepo(tmp_path), TOKEN, "o/r")
     assert (signal.getsignal(signal.SIGTERM), signal.getsignal(signal.SIGHUP)) == before
+
+
+# ---------------------------------------------------------------- a token file left behind by a push that could not clean up
+def _aged(path, seconds):
+    t = time.time() - seconds
+    os.utime(path, (t, t))
+
+
+def test_stale_token_files_in_the_runtime_dir_are_deleted_and_nothing_else(tmp_path, monkeypatch):
+    runtime = tmp_path / "run"
+    runtime.mkdir()
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(runtime))
+    for name in ("lifeboat-gh-token-abc", "lifeboat-gh-xyz"):  # the current and the earlier prefix
+        (runtime / name).write_text(TOKEN)
+        _aged(runtime / name, 3600)
+    (runtime / "lifeboat-gh-token-live").write_text(TOKEN)  # a push in another process is using this one right now
+    (runtime / "other.txt").write_text("keep")
+    _aged(runtime / "other.txt", 3600)
+    github.clear_stale_token_files()
+    assert sorted(p.name for p in runtime.iterdir()) == ["lifeboat-gh-token-live", "other.txt"]
+
+
+def test_clearing_stale_token_files_without_a_runtime_dir_does_nothing(tmp_path, monkeypatch):
+    monkeypatch.delenv("XDG_RUNTIME_DIR", raising=False)
+    github.clear_stale_token_files()
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path / "missing"))
+    github.clear_stale_token_files()
+
+
+def test_the_token_file_name_starts_with_lifeboat_gh_token(tmp_path, fakegit):
+    github.push(mkrepo(tmp_path), TOKEN, "o/r")
+    assert os.path.basename(fakegit.pushes[0]["path"]).startswith("lifeboat-gh-token-")

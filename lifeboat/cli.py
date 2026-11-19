@@ -144,6 +144,15 @@ def cmd_secret_scan(a) -> int:
     return secretscan.main(["--probe"] if a.probe else ["--pre-push"])
 
 
+def cmd_store_push(a) -> int:
+    from lifeboat import store
+    res = store.run_daily(_load())
+    if res is None:
+        res = {"ok": False, "pushed": False, "blocked_findings": [], "error": "no config store is set up", "signed_out": ""}
+    print(json.dumps(res))
+    return 0 if res["ok"] else 1
+
+
 def cmd_versions(a) -> int:
     cfg = _load()
     cfg.job(a.job)
@@ -329,6 +338,9 @@ def parser() -> argparse.ArgumentParser:
     g.add_argument("--probe", action="store_true", help="print the marker the pre-push hook looks for, then exit")
     s.add_argument("git_args", nargs="*", help="the remote name and URL git passes to a pre-push hook (ignored)")
     s.set_defaults(fn=cmd_secret_scan)
+    s = sub.add_parser("store-push", help="scan and push the config store now (what the app's Push now runs); prints the result as JSON")
+    s.add_argument("--json", action="store_true", help="accepted for symmetry; the result is always JSON")
+    s.set_defaults(fn=cmd_store_push)
     s = sub.add_parser("restore", help="copy a job's files into a folder")
     s.add_argument("job")
     s.add_argument("--to", required=True, metavar="DIR", help="target folder")
@@ -372,6 +384,8 @@ def parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
+    from lifeboat import github
+    github.clear_stale_token_files()
     # debug aliases from the first version
     if argv[:1] == ["--dump"]:
         argv = ["status", "--json"]

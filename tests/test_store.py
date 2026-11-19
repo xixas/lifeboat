@@ -540,3 +540,31 @@ def test_the_daily_push_refuses_a_source_inside_a_bigger_repo_and_commits_nothin
     assert r["ok"] is False and r["error"] == f"{sub} is inside the git repo {top}; pick the repo root"
     assert store.git_state(top)["dirty_count"] == 1 and not (top / ".git" / "hooks" / "pre-push").exists()
     assert _git(top, "log", "--format=%s").strip() == "init"
+
+
+# ---------------------------------------------------------------- the app pushes through the CLI, so signal cleanup applies
+def test_the_apps_push_is_a_lifeboat_store_push_subprocess(monkeypatch):
+    import json
+    import subprocess
+    import sys
+    seen = []
+
+    def fake_run(argv, **kw):
+        seen.append((argv, kw))
+        return subprocess.CompletedProcess(argv, 1, json.dumps({"ok": False, "pushed": False, "error": "boom", "blocked_findings": []}), "")
+    monkeypatch.setattr(store.subprocess, "run", fake_run)
+    res = store.push_in_subprocess()
+    assert res["error"] == "boom" and res["ok"] is False
+    assert seen[0][0] == [sys.executable, "-m", "lifeboat", "store-push", "--json"] and seen[0][1]["capture_output"] is True
+
+
+def test_the_apps_push_survives_a_crashed_or_silent_subprocess(monkeypatch):
+    import subprocess
+    monkeypatch.setattr(store.subprocess, "run", lambda argv, **kw: subprocess.CompletedProcess(argv, 1, "Traceback...", "oops"))
+    res = store.push_in_subprocess()
+    assert res["ok"] is False and res["pushed"] is False and res["error"]
+
+    def hang(argv, **kw):
+        raise subprocess.TimeoutExpired(argv, 1)
+    monkeypatch.setattr(store.subprocess, "run", hang)
+    assert store.push_in_subprocess()["ok"] is False

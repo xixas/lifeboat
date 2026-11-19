@@ -180,6 +180,24 @@ def _remove(path: str, folder: str | None) -> None:
         shutil.rmtree(folder, ignore_errors=True)
 
 
+STALE_AFTER = 600  # seconds; a push is over after 120, so a token file this old was left behind
+
+
+def clear_stale_token_files(max_age: float = STALE_AFTER) -> None:
+    """Delete token files a push could not clean up (a push on a non-main thread cannot install signal handlers, then the process was
+    killed). Run at startup. Files younger than max_age may belong to a push in another process and stay."""
+    runtime = os.environ.get("XDG_RUNTIME_DIR")
+    if not runtime or not os.path.isdir(runtime):
+        return
+    for name in os.listdir(runtime):
+        path = os.path.join(runtime, name)
+        try:
+            if name.startswith("lifeboat-gh-") and os.path.isfile(path) and time.time() - os.stat(path).st_mtime > max_age:
+                os.unlink(path)
+        except OSError:
+            pass
+
+
 @contextlib.contextmanager
 def _token_file(token: str):
     """The token in a file only this user can read ($XDG_RUNTIME_DIR, which is tmpfs and cleared at logout, else a 0700 temp dir),
@@ -187,7 +205,7 @@ def _token_file(token: str):
     because git runs hooks (the secret check, a user's own) with that environment."""
     runtime = os.environ.get("XDG_RUNTIME_DIR")
     folder = tempfile.mkdtemp(prefix="lifeboat-") if not (runtime and os.path.isdir(runtime)) else None
-    fd, path = tempfile.mkstemp(dir=folder or runtime, prefix="lifeboat-gh-")  # mkstemp creates the file 0600
+    fd, path = tempfile.mkstemp(dir=folder or runtime, prefix="lifeboat-gh-token-")  # mkstemp creates the file 0600
     previous = {}
 
     def on_signal(signum, frame):

@@ -81,12 +81,10 @@ class StoreMixin:
         StoreSetup(self, signin_only=True).present(self)
 
     def push_store(self):
-        cfg = self.cfg
-
         def done(res):
             self.toast("Config store: " + ("pushed" if res and res["pushed"] else "nothing to push" if res and res["ok"] else "not pushed"))
             self.refresh()
-        self.in_thread(lambda: store.run_daily(cfg, GITHUB()), done)
+        self.in_thread(store.push_in_subprocess, done)  # its own process, so a killed push cleans its token file up
 
     def open_skillshare(self):
         def done(ok):

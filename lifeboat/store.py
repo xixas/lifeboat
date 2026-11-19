@@ -189,6 +189,8 @@ def prepare(repo: Path | str | None, binary: Path | str | None = None, home: Pat
         return out
     if not store_install.disable_update_check(binary, home):
         return {**out, "ok": False, "error": "could not turn off skillshare's update check"}
+    if out["source"] and not git_state(out["source"])["is_repo"]:
+        return {**out, "ok": False, "error": f"{out['source']} is not a git repository"}
     try:
         secretscan.install_pre_push_hook(out["source"])
     except (OSError, RuntimeError, TypeError) as e:

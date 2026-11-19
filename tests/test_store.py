@@ -437,3 +437,17 @@ def test_a_failed_push_that_is_not_an_auth_error_stays_signed_in(source, tmp_pat
     gh = RevokedGH()
     r = store.run_daily(_cfg(source), gh=gh)
     assert r["ok"] is False and not r.get("signed_out") and gh.signed_out is False
+
+
+def test_prepare_refuses_a_source_that_is_not_a_git_repository_and_writes_no_hook(tmp_path, fake_ss, monkeypatch):
+    p, _ = fake_ss
+    plain, cwd = tmp_path / "plain", tmp_path / "cwd"
+    plain.mkdir()
+    cwd.mkdir()
+    monkeypatch.chdir(cwd)
+    _skillshare_config(tmp_path, monkeypatch, plain)
+    r = store.prepare(None, binary=p)  # an existing skillshare source that git has never seen
+    assert r["ok"] is False and r["error"] == f"{plain} is not a git repository"
+    assert list(cwd.iterdir()) == [] and list(plain.iterdir()) == []
+    assert store.prepare(plain, binary=p)["error"] == f"{plain} is not a git repository"
+    assert list(cwd.iterdir()) == []

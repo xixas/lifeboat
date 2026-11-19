@@ -245,6 +245,8 @@ def install_pre_push_hook(repo) -> Path:
     """Write pre-push into the hooks folder git uses: .git/hooks, or core.hooksPath if the repo sets it. When core.hooksPath comes
     from global or system config, a Lifeboat-owned folder in this repo takes its place (see _own_hooks_dir) and chains to the global
     hooks. Any hook already in the folder is kept as pre-push.lifeboat-chained and still runs."""
+    if not _git(repo, "rev-parse", "--git-dir").strip():
+        raise RuntimeError(f"{repo} is not a git repository")
     scope, configured = _hooks_path(repo)
     if scope in ("global", "system"):
         hooks = _own_hooks_dir(repo, Path(configured))

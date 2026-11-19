@@ -352,3 +352,14 @@ def test_no_lifeboat_on_path_warns_and_allows(repo):
 def test_the_probe_flag_prints_the_marker():
     r = subprocess.run(["lifeboat", "secret-scan", "--probe"], capture_output=True, text=True, env=push_env())
     assert r.returncode == 0 and r.stdout.strip() == "lifeboat-secret-scan-1"
+
+
+def test_installing_in_a_folder_that_is_not_a_repo_raises_and_writes_nothing(tmp_path, monkeypatch):
+    plain, cwd = tmp_path / "plain", tmp_path / "cwd"
+    plain.mkdir()
+    cwd.mkdir()
+    monkeypatch.chdir(cwd)
+    monkeypatch.setenv("GIT_CEILING_DIRECTORIES", str(tmp_path))
+    with pytest.raises(RuntimeError, match="not a git repository"):
+        secretscan.install_pre_push_hook(plain)
+    assert list(cwd.iterdir()) == [] and list(plain.iterdir()) == []

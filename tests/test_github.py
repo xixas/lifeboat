@@ -14,9 +14,9 @@ from lifeboat import github
 TOKEN = "ghu_" + "t" * 36
 
 
-def helper_path(argv):
-    """The token file the credential helper in a `git push` argv reads."""
-    helper = next(a for a in argv if a.startswith("credential.helper=!f()"))
+def helper_path(env):
+    """The token file the credential helper in a `git push` environment reads."""
+    helper = next(v for k, v in env.items() if k.startswith("GIT_CONFIG_VALUE_") and v.startswith("!f()"))
     return re.search(r"cat (\S+?)\)", helper).group(1)
 
 
@@ -155,14 +155,17 @@ def test_push_passes_the_token_in_a_private_file_never_in_the_environment(tmp_pa
     seen = {}
 
     def fake_run(argv, **kw):
-        path = helper_path(argv)
+        path = helper_path(kw["env"])
         seen.update(argv=argv, env=kw["env"], path=path, mode=oct(os.stat(path).st_mode & 0o777), content=open(path).read())
         return subprocess.CompletedProcess(argv, 0, "", "")
     monkeypatch.setattr(github.subprocess, "run", fake_run)
     r = github.push(tmp_path, TOKEN)
     assert r["ok"] is True
-    assert seen["argv"][:3] == ["git", "-C", str(tmp_path)] and seen["argv"][-1] == "push" and "credential.helper=" in seen["argv"]
-    assert "x-access-token" in " ".join(seen["argv"]) and not any(TOKEN in a for a in seen["argv"])
+    assert seen["argv"][:3] == ["git", "-C", str(tmp_path)] and seen["argv"][-1] == "push" and "-c" not in seen["argv"]
+    assert not any(TOKEN in a for a in seen["argv"]) and "x-access-token" in " ".join(seen["env"].values())
+    e = seen["env"]  # an empty helper first (it resets any other), then ours
+    assert e["GIT_CONFIG_COUNT"] == "2" and (e["GIT_CONFIG_KEY_0"], e["GIT_CONFIG_VALUE_0"]) == ("credential.helper", "")
+    assert e["GIT_CONFIG_KEY_1"] == "credential.helper" and "GIT_CONFIG_PARAMETERS" not in e
     assert seen["mode"] == "0o600" and seen["content"].strip() == TOKEN and seen["path"].startswith(str(runtime))
     assert TOKEN not in "".join(seen["env"].values()) and "LIFEBOAT_GH_TOKEN" not in seen["env"]
     assert seen["env"]["GIT_TERMINAL_PROMPT"] == "0"
@@ -174,14 +177,14 @@ def test_the_token_file_is_removed_when_the_push_fails_or_crashes(tmp_path, monk
     paths = []
 
     def failing(argv, **kw):
-        paths.append(helper_path(argv))
+        paths.append(helper_path(kw["env"]))
         return subprocess.CompletedProcess(argv, 1, "", "denied")
     monkeypatch.setattr(github.subprocess, "run", failing)
     assert github.push(tmp_path, TOKEN)["ok"] is False
     assert not os.path.exists(paths[-1])
 
     def crashing(argv, **kw):
-        paths.append(helper_path(argv))
+        paths.append(helper_path(kw["env"]))
         raise subprocess.TimeoutExpired(argv, 1)
     monkeypatch.setattr(github.subprocess, "run", crashing)
     assert github.push(tmp_path, TOKEN)["ok"] is False
@@ -194,7 +197,7 @@ def test_without_a_runtime_dir_the_file_lives_in_a_private_temp_dir(tmp_path, mo
     modes = []
 
     def fake_run(argv, **kw):
-        path = helper_path(argv)
+        path = helper_path(kw["env"])
         modes.append((oct(os.stat(path).st_mode & 0o777), oct(os.stat(os.path.dirname(path)).st_mode & 0o777)))
         return subprocess.CompletedProcess(argv, 0, "", "")
     monkeypatch.setattr(github.subprocess, "run", fake_run)
@@ -214,7 +217,7 @@ def test_a_pre_push_hook_does_not_see_the_token(tmp_path, monkeypatch):
         subprocess.run(["git", "-C", str(work), *args], check=True)
     dump = tmp_path / "hook-env.txt"
     hook = work / ".git" / "hooks" / "pre-push"
-    hook.write_text(f"#!/bin/sh\nenv > {dump}\nexit 0\n")
+    hook.write_text(f"#!/bin/sh\nenv > {dump}\nprintf '%s\\n' \"$@\" >> {dump}\nps -o args= -p $PPID >> {dump}\nexit 0\n")
     hook.chmod(0o755)
     assert github.push(work, TOKEN, set_upstream="main")["ok"] is True
     assert dump.exists() and TOKEN not in dump.read_text() and "LIFEBOAT_GH_TOKEN" not in dump.read_text()

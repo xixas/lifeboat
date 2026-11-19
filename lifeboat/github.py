@@ -213,9 +213,12 @@ def push(repo_path, token: str, timeout: int = 120, set_upstream: str | None = N
     """`git push` with the token supplied to this one process through a private file: never argv, never the environment, never git config."""
     try:
         with _token_file(token) as path:
-            argv = ["git", "-C", str(repo_path), "-c", "credential.helper=", "-c", "credential.helper=" + HELPER.format(path=shlex.quote(path)),
-                    "push", *(["-u", "origin", set_upstream] if set_upstream else [])]
-            r = subprocess.run(argv, env={**os.environ, "GIT_TERMINAL_PROMPT": "0"}, capture_output=True, text=True, timeout=timeout, check=False)
+            n = int(os.environ.get("GIT_CONFIG_COUNT") or 0)  # config through the environment, not `-c`: git hands that to hooks
+            env = {**os.environ, "GIT_TERMINAL_PROMPT": "0", "GIT_CONFIG_COUNT": str(n + 2),
+                   f"GIT_CONFIG_KEY_{n}": "credential.helper", f"GIT_CONFIG_VALUE_{n}": "",  # empty: forget any other helper
+                   f"GIT_CONFIG_KEY_{n + 1}": "credential.helper", f"GIT_CONFIG_VALUE_{n + 1}": HELPER.format(path=shlex.quote(path))}
+            argv = ["git", "-C", str(repo_path), "push", *(["-u", "origin", set_upstream] if set_upstream else [])]
+            r = subprocess.run(argv, env=env, capture_output=True, text=True, timeout=timeout, check=False)
     except (OSError, subprocess.TimeoutExpired) as e:
         return {"ok": False, "error": str(e).replace(token, "***")}
     return {"ok": r.returncode == 0, "error": "" if r.returncode == 0 else (r.stderr or r.stdout).replace(token, "***").strip()[-500:]}

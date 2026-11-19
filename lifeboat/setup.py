@@ -496,8 +496,9 @@ def write_wizard_config(path: Path, device: str, choices: list[dict], daily_at: 
 def _manifest_jobs(manifest: dict, retired: bool = False) -> list[Job]:
     """The manifest's jobs; with retired=True also those no longer backed up from the device (still on Drive, restorable)."""
     try:
-        return [Job(name=j["name"], source=j["source"], dest=j["dest"], old=j["old"], exclude=list(JUNK_EXCLUDES),
-                    encrypted=bool(j.get("encrypted"))) for j in manifest["jobs"] + (manifest.get("retired", []) if retired else [])]
+        return [Job(name=j["name"], source=j["source"], dest=j["dest"], old=j["old"],
+                    exclude=list(j["exclude"]) if "exclude" in j else list(JUNK_EXCLUDES), include=list(j.get("include") or []),
+                    filter_file=j.get("filter_file") or "", encrypted=bool(j.get("encrypted")), links=bool(j.get("links"))) for j in manifest["jobs"] + (manifest.get("retired", []) if retired else [])]
     except (KeyError, TypeError):
         raise ConfigError("The backup's manifest is incomplete.") from None
 

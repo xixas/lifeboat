@@ -820,3 +820,34 @@ def test_home_files_job_syncs_only_the_chosen_files(fake_home, tmp_path):
     cfg = config.parse({"jobs": [{"name": job.name, "source": job.source, "dest": job.dest, "old": job.old, "include": job.include}]})
     assert engine.run_backup(cfg)["ok"]
     assert sorted(p.name for p in (tmp_path / "dest").rglob("*") if p.is_file()) == [".zshrc"]
+
+
+def test_a_wizard_job_survives_the_manifest_round_trip(wiz, fake_home):
+    """Laptop A's wizard jobs, restored and continued on laptop B, must not lose include, exclude or links."""
+    from lifeboat import engine
+    (fake_home / ".zshrc").write_text("x")
+    items = [{**folder("claude", "Claude Code", str(fake_home / ".claude"), secret=True), "kind": "dir", "links": True,
+              "exclude": ["/debug/**"]},
+             {**folder("zshrc", ".zshrc", str(fake_home / ".zshrc")), "kind": "file"}]
+    setup.write_wizard_config(wiz, "laptop", items, "13:00")
+    a = config.load_config(wiz)
+    manifest = {"device": "laptop", "jobs": [engine._job_doc(j) for j in a.jobs]}
+    setup.config_from_manifest(wiz.with_name("b.toml"), manifest, "13:00")
+    b = config.load_config(wiz.with_name("b.toml"))
+    for x, y in zip(a.jobs, b.jobs, strict=True):
+        assert (y.include, y.exclude, y.links, y.filter_file) == (x.include, x.exclude, x.links, x.filter_file)
+    assert b.job("home-files").include == ["/.zshrc"]
+
+
+def test_an_old_manifest_without_the_new_fields_still_loads(wiz):
+    cfg = setup.restore_config(manifest_for(), wiz.with_name("r.conf"))
+    assert cfg.jobs[0].exclude == setup.JUNK_EXCLUDES and cfg.jobs[0].links is False
+
+
+def test_a_job_that_would_back_up_the_whole_home_is_refused():
+    base = {"name": "j", "source": "~", "dest": "x:j", "old": "x:_old"}
+    with pytest.raises(config.ConfigError, match="whole home"):
+        config.parse({"jobs": [base]})
+    assert config.parse({"jobs": [{**base, "include": ["/.zshrc"]}]})
+    assert config.parse({"jobs": [{**base, "filter_file": "f.txt"}]})
+    assert config.parse({"jobs": [{**base, "source": "~/Documents"}]})

@@ -162,6 +162,9 @@ def parse(data: dict, path: Path | None = None) -> Config:
         )
         if job.include and job.exclude:
             raise ConfigError(f"{where} ({job.name!r}): include and exclude cannot be combined (rclone does not support mixing them)")
+        if job.source.rstrip("/") == "~" and not (job.include or job.filter_file):
+            raise ConfigError(f"{where} ({job.name!r}): a source of ~ would back up your whole home folder; list the files "
+                              "with include, or use a filter_file")
         if not NAME_RE.match(job.name):
             raise ConfigError(f"{where}.name may only use letters, digits, '.', '_' and '-', got {job.name!r}")
         if job.name in seen:

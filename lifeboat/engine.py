@@ -173,7 +173,8 @@ def run_settings(cfg: Config, emit: Emit | None = None) -> bool:
 
 
 def _job_doc(j: Job) -> dict:
-    return {"name": j.name, "source": j.source, "dest": j.dest, "old": j.old, "encrypted": j.encrypted}
+    return {"name": j.name, "source": j.source, "dest": j.dest, "old": j.old, "encrypted": j.encrypted, "include": j.include,
+            "exclude": j.exclude, "links": j.links, "filter_file": j.filter_file}
 
 
 def manifest_doc(cfg: Config, state: dict, previous: dict | None = None) -> dict:

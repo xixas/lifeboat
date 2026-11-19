@@ -347,7 +347,7 @@ def test_manifest_is_uploaded_with_documented_keys_and_no_secrets(tmp_path, make
     assert set(doc) == {"format", "device", "host", "lifeboat", "time", "ok", "jobs"}
     assert doc["format"] == 1 and doc["device"] == "thinkpad" and doc["time"] == st["time"] and doc["ok"] is True
     assert doc["jobs"] == [{"name": "docs", "source": str(tmp_path / "src"), "dest": f"localdrv:{tmp_path}/dest",
-                            "old": f"localdrv:{tmp_path}/old", "encrypted": False}]
+                            "old": f"localdrv:{tmp_path}/old", "encrypted": False, "include": [], "exclude": [], "links": False, "filter_file": ""}]
     assert "hunter2" not in raw and "password_command" not in raw
     assert st["manifest"] == {"ok": True, "rc": 0}
 

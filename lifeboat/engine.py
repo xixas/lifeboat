@@ -407,11 +407,12 @@ def dropped_sources() -> list[str]:
     return [s for s in dropped if isinstance(s, str)]
 
 
-def ack_dropped() -> None:
-    """Forget the dropped sources, so `lifeboat check` stops notifying about them."""
+def ack_dropped(only: list[str] | None = None) -> None:
+    """Forget the dropped sources (just `only` if given), so `lifeboat check` stops notifying about them."""
     doc = read_json(state_dir() / "coverage.json")
     if isinstance(doc, dict):
-        write_json("coverage.json", {**doc, "dropped": []})
+        keep = [s for s in doc.get("dropped", []) if only is not None and s not in only]
+        write_json("coverage.json", {**doc, "dropped": keep})
 
 
 # ---------------------------------------------------------------- versions, prune, restore

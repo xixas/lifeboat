@@ -128,10 +128,18 @@ class FoundDialog(Adw.Dialog):
         self.toasts = Adw.ToastOverlay(child=self.view)
         self.set_child(self.toasts)
         self.view.set_content(Adw.StatusPage(title="Looking around…", child=spinner(), css_classes=["compact"]))
-        self.connect("closed", lambda *_: setattr(self, "dead", True))
-        path = win.cfg.path
-        win.in_thread(lambda: (catalogue.scan(Path.home()), load_config(path)), self._loaded,
-                      lambda _e: self._failed("Could not look through this laptop."))
+        self.connect("closed", self._closed)
+        self.path = win.cfg.path
+        win.in_thread(self._scan, self._loaded, lambda _e: self._failed("Could not look through this laptop."))
+
+    def _scan(self):
+        items = catalogue.scan(Path.home())
+        found.mark_seen(i["key"] for i in items)  # shown now, so Overview stops calling them new
+        return items, load_config(self.path)
+
+    def _closed(self, *_):
+        self.dead = True
+        self.win.refresh()
 
     def _failed(self, text):
         if not self.dead:

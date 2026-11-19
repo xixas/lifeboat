@@ -9,7 +9,7 @@ gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
 from gi.repository import Adw, Gio, GLib, Gtk  # noqa: E402
 
-from lifeboat import APP_ID, engine  # noqa: E402
+from lifeboat import APP_ID, catalogue, engine, found  # noqa: E402
 from lifeboat.app.found import FoundDialog  # noqa: E402
 from lifeboat.app.pages import PAGE_ICONS, PAGE_NAMES, PagesMixin  # noqa: E402
 from lifeboat.app.progress import BackupProgress, plan  # noqa: E402
@@ -31,7 +31,15 @@ def gather() -> dict:
         cfg = load_config(path)
     except ConfigError as e:
         return {"kind": "error", "path": path, "error": str(e)}
-    return {"kind": "ok", "path": path, "cfg": cfg, "st": engine.status(cfg)}
+    st = engine.status(cfg)
+    d = {"kind": "ok", "path": path, "cfg": cfg, "st": st, "new_items": [], "dropped_items": [(s, None) for s in st["dropped"]]}
+    try:  # the scan only adds alerts: if it fails the window still shows the status
+        items = catalogue.scan(Path.home())
+        d["new_items"] = found.unseen_new_items(items, cfg)
+        d["dropped_items"] = found.match_dropped(st["dropped"], items)
+    except OSError as e:
+        print("scan failed:", e, file=sys.stderr)
+    return d
 
 
 class Win(PagesMixin, Adw.ApplicationWindow):

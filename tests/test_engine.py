@@ -805,6 +805,14 @@ def test_a_source_that_disappears_from_the_config_is_reported_dropped_until_ackn
     assert engine.problems(cfg, engine.status(cfg)) == []
 
 
+def test_ack_dropped_can_forget_just_some_sources(env):
+    engine.write_json("coverage.json", {"sources": [], "dropped": ["~/a", "~/b", "~/c"]})
+    engine.ack_dropped(["~/a", "~/c"])
+    assert engine.dropped_sources() == ["~/b"]
+    engine.ack_dropped()
+    assert engine.dropped_sources() == []
+
+
 def test_a_dropped_source_that_is_added_back_is_no_longer_dropped(tmp_path, make_cfg, clock):
     cfg = make_cfg()
     (tmp_path / "src" / "a").write_text("a")

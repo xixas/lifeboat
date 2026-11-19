@@ -116,3 +116,14 @@ def test_items_group_in_catalogue_order_and_group_less_items_fall_back():
 def test_a_group_with_a_plain_item_is_not_called_encrypted():
     got = found.grouped([item("zsh", "/h/z", group="shell", secret=True), item("fish", "/h/f", group="shell")])
     assert got[0][3] is False
+
+
+def test_add_back_re_adds_the_matched_jobs_and_acknowledges_only_those(cfg_file, fake_home, monkeypatch):
+    monkeypatch.setenv("XDG_STATE_HOME", str(fake_home / "state"))
+    from lifeboat import engine
+    engine.write_json("coverage.json", {"sources": [], "dropped": ["~/.claude", "~/Old"]})
+    items = [item("claude", fake_home / ".claude", label="Claude Code", secret=True)]
+    pairs = found.match_dropped(engine.dropped_sources(), items)
+    assert found.add_back(cfg_file, pairs) == ["~/.claude"]
+    assert config.load_config(cfg_file).job("claude-code").source == "~/.claude"
+    assert engine.dropped_sources() == ["~/Old"]  # what has no catalogue item stays until it is dismissed

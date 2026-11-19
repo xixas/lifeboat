@@ -13,6 +13,7 @@ from lifeboat.config import (
     Job,
     add_ignore_text,
     add_job_text,
+    load_config,
     remove_ignore_text,
     write_config_text,
 )
@@ -71,6 +72,18 @@ def match_dropped(dropped: list[str], items: list[dict]) -> list[tuple[str, dict
     """Each dropped source with the catalogue item at that path, or None when none is (a hand-added folder)."""
     by_path = {os.path.realpath(i["path"]): i for i in items}
     return [(d, by_path.get(os.path.realpath(_expand(d)))) for d in dropped]
+
+
+def add_back(path: Path, pairs: list[tuple[str, dict | None]]) -> list[str]:
+    """Re-add the job for each dropped source that match_dropped found an item for, then forget just those sources.
+    Returns the sources added back."""
+    done = []
+    for source, item in pairs:
+        if item is not None:
+            add_item(load_config(path), item)
+            done.append(source)
+    engine.ack_dropped(done)
+    return done
 
 
 def new_items(items: list[dict], cfg: Config, seen: set[str]) -> list[dict]:

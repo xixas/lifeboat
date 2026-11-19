@@ -9,8 +9,9 @@ gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
 from gi.repository import Adw, GLib, Gtk  # noqa: E402
 
-from lifeboat import APP_ID, engine, timer  # noqa: E402
+from lifeboat import APP_ID, engine, found, timer  # noqa: E402
 from lifeboat.app.widgets import CSS, ICONS, WORDS, ago, fmt_time, group, label, row  # noqa: E402
+from lifeboat.app.wizard_state import tilde  # noqa: E402
 from lifeboat.config import example_config_path  # noqa: E402
 
 # pinned: never run an unpinned latest from npm
@@ -68,6 +69,9 @@ class PagesMixin:
         S = self.st
         pg = Adw.PreferencesPage()
         pg.add(group(rows=[Adw.StatusPage(icon_name=APP_ID, title=v["title"], description=v["weakest"], css_classes=["compact"])]))
+        alerts = self._alerts()
+        if alerts:
+            pg.add(group(rows=alerts))
         last = S["last"]
         rows = [self.status_row("Backups", "Never run" if not last else
                                 f"Last backup {ago(last['time'])}{' (dry run)' if last['dry_run'] else ''} · {len(S['jobs'])} job(s)",
@@ -78,6 +82,30 @@ class PagesMixin:
         pg.add(group(rows=rows))
         pg.add(group(rows=[self._box([self.button("Back up now", self.run_backup, ("pill", "suggested-action"))])]))
         return pg
+
+    def _alerts(self):
+        """Rows for what stopped being backed up and for new things worth a look; empty when there is neither."""
+        out = []
+        if (dropped := self.data["dropped_items"]):
+            r = row("No longer backed up", ", ".join(tilde(p) for p, _i in dropped), icon=ICONS["warn"])
+            if any(i is not None for _p, i in dropped):
+                r.add_suffix(self.button("Add back", self.add_back_dropped, ("flat",), False))
+            r.add_suffix(self.button("Dismiss", self.dismiss_dropped, ("flat",), False))
+            out.append(r)
+        if (new := self.data["new_items"]):
+            r = row(f"{len(new)} new item{'s' if len(new) != 1 else ''} found", ", ".join(i["label"] for i in new[:4]) +
+                    (f" and {len(new) - 4} more" if len(new) > 4 else ""), icon="find-location-symbolic")
+            r.add_suffix(self.button("Review", self.open_found, ("flat",), False))
+            out.append(r)
+        return out
+
+    def add_back_dropped(self):
+        path, pairs = self.cfg.path, self.data["dropped_items"]
+        self.in_thread(lambda: found.add_back(path, pairs),
+                       lambda done: (self.toast(f"Added {len(done)} back to your backup"), self.refresh()))
+
+    def dismiss_dropped(self):
+        self.in_thread(engine.ack_dropped, lambda _r: self.refresh())
 
     # -- backups
     def page_backups(self):

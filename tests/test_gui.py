@@ -1295,7 +1295,39 @@ assert pump(lambda: config.load_config(cfg_path).scan_ignore == [])
 print("FOUND OK")
 '''
 
+OVERVIEW_BODY = r'''
+from lifeboat import config, engine
+from lifeboat import found as seen_mod
+HOME = Path(sys.argv[1])
+cfg_path = config.config_path()
+docs_choice = {"key": "documents", "label": "Documents", "path": str(HOME / "Documents"), "secret": False}
+setup._write_new_config(cfg_path, "laptop", "13:00", setup.wizard_jobs("laptop", [docs_choice]))
+engine.write_json("coverage.json", {"sources": [], "dropped": ["~/.claude", "~/Old"]})
+engine.write_json("seen-items.json", {"keys": ["documents"]})  # not the first look: the rest of the laptop is new
+win = Win(None)
+win.present()
+win.apply(gather())
+win.show_page("overview")
+text = labels(win)
+assert "No longer backed up" in text and "~/.claude, ~/Old" in text, text
+assert "3 new items found" in text, text
+shot("12-overview-alerts", win.get_content())
+click(win, "Add back")  # ~/.claude has a catalogue item; ~/Old does not
+assert pump(lambda: any(j.name == "claude-code" for j in config.load_config(cfg_path).jobs)), "not added back"
+assert pump(lambda: "No longer backed up" in labels(win) and "~/Old" in labels(win) and "~/.claude, ~/Old" not in labels(win))
+assert engine.dropped_sources() == ["~/Old"]
+assert [b.get_label() for b in buttons(win)].count("Add back") == 0  # nothing left that can be added back
+click(win, "Dismiss")
+assert pump(lambda: "No longer backed up" not in labels(win)), labels(win)
+assert engine.dropped_sources() == []
+assert "2 new items found" in labels(win)
+click(win, "Review")  # looking at them is what makes them no longer new
+assert pump(lambda: seen_mod.read_seen() >= {"ssh", "pictures", "claude"}), seen_mod.read_seen()
+print("OVERVIEW OK")
+'''
+
 WIZARD_SCRIPT = PRELUDE + SETUP_BODY
+OVERVIEW_SCRIPT = PRELUDE + OVERVIEW_BODY
 FOUND_SCRIPT = PRELUDE + FOUND_BODY
 RESTORE_SCRIPT = PRELUDE + RESTORE_BODY
 PROGRESS_SCRIPT = PRELUDE + PROGRESS_BODY
@@ -1343,3 +1375,7 @@ def test_backup_checklist_dialog_follows_events(env):
 
 def test_found_dialog_adds_jobs_and_persists_ignore(env):
     run_broadway(env, FOUND_SCRIPT, "FOUND OK")
+
+
+def test_overview_alerts_for_dropped_and_new_items(env):
+    run_broadway(env, OVERVIEW_SCRIPT, "OVERVIEW OK")

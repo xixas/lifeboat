@@ -1463,6 +1463,19 @@ win.show_page("store")
 assert "Push now" in [b.get_label() for b in buttons(win)] and "Sign out" in [b.get_label() for b in buttons(win)]
 click(win, "Sign out")
 assert pump(lambda: ("signout",) in calls)
+FakeGH.signed = False  # signed out: the page offers Sign in, and the dialog goes straight to the GitHub step
+win.apply(gather())
+win.show_page("store")
+names = [b.get_label() for b in buttons(win)]
+assert "Sign in" in names and "Sign out" not in names, names
+assert "Signed out: pushes are paused until you sign in" in labels(win), labels(win)
+shot("6d-store-status-signed-out", win.get_content())
+click(win, "Sign in")
+sdlg = win.get_visible_dialog()
+assert pump(lambda: sdlg.nav.get_visible_page().get_tag() == "connect"), sdlg.nav.get_visible_page().get_tag()
+sdlg.force_close()
+pump(timeout=0.3)
+FakeGH.signed = True
 engine.write_json("store.json", {"time": datetime.now(timezone.utc).isoformat(), "ok": False, "pushed": False, "error": "",
                                  "blocked_findings": [{"file": "skills/x/.env", "line": 3, "rule": "aws-access-key"}], "last_ok_time": None})
 win.apply(gather())

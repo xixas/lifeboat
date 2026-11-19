@@ -58,6 +58,7 @@ class StoreMixin:
         pg.add(group("Last push", rows=[r] + [row(f"{f['file']}:{f['line']}:{f['rule']}", icon=ICONS["error"])
                                                for f in (last or {}).get("blocked_findings", [])]))
         pg.add(group("Store", rows=[
+            row("GitHub sign-in", "Signed in" if info["signed_in"] else "Signed out: pushes are paused until you sign in"),
             row("Folder", tilde(store_source_path(cfg))),
             row("Remote", git["remote_url"] or "None"),
             row("Branch", git["branch"] or "None"),
@@ -65,13 +66,16 @@ class StoreMixin:
             row("Uncommitted changes", str(git["dirty_count"]))]))
         btns = [self.button("Push now", self.push_store, ("pill", "suggested-action")),
                 self.button("Open skillshare", self.open_skillshare, ("pill",), False)]
-        if info["signed_in"]:
-            btns.append(self.button("Sign out", self.sign_out_store, ("pill",), False))
+        btns.append(self.button("Sign out", self.sign_out_store, ("pill",), False) if info["signed_in"] else
+                    self.button("Sign in", self.open_store_signin, ("pill", "suggested-action"), False))
         pg.add(group(rows=[self._box(btns)]))
         return pg
 
     def open_store_setup(self):
         StoreSetup(self).present(self)
+
+    def open_store_signin(self):
+        StoreSetup(self, signin_only=True).present(self)
 
     def push_store(self):
         cfg = self.cfg
@@ -100,8 +104,8 @@ def store_source_path(cfg) -> str:
 class StoreSetup(AccountDialog):
     """Install, pick, connect GitHub, done. Each step is a page; a failure stops on that page with the reason."""
 
-    def __init__(self, win):
-        super().__init__(win, "Set up config store")
+    def __init__(self, win, signin_only=False):
+        super().__init__(win, "Sign in to GitHub" if signin_only else "Set up config store")
         self.gh = GITHUB()
         self.repo = None  # the chosen checkout, None for a new store
         self.source = None  # the folder skillshare ends up using
@@ -110,7 +114,13 @@ class StoreSetup(AccountDialog):
         self.cands = []
         self.existing = None  # the folder skillshare already uses, from an earlier or interrupted setup
         self.nav.add(self._install_page())
-        self._run_install()
+        if signin_only:  # the store is set up; only the GitHub sign-in is missing or was revoked
+            self.source = store_source_path(win.cfg)
+            self.step_row.set_title("Checking your store")
+            self.step_row.set_subtitle("")
+            self.win.in_thread(lambda: store.git_state(self.source)["remote_url"], self._remote_known)
+        else:
+            self._run_install()
 
     # -- 1. install skillshare
     def _install_page(self):
@@ -316,7 +326,8 @@ class StoreSetup(AccountDialog):
         if not self.remote:
             store.connect_remote(self.source, repo["clone_url"])
         path = self.win.cfg.path
-        write_config_text(path, set_store_text(path.read_text(encoding="utf-8"), tilde(self.source)))
+        write_config_text(path, set_store_text(path.read_text(encoding="utf-8"), tilde(self.source), github=True))
+        store.clear_signed_out()
         return repo
 
     def _save_failed(self, e):

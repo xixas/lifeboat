@@ -413,3 +413,56 @@ def test_a_new_store_with_no_upstream_is_pushed_with_dash_u_on_the_first_run(tmp
     assert _git(src, "rev-parse", "--abbrev-ref", "@{u}").strip() == "origin/main"
     again = store.run_daily(_cfg(src), gh=Token())
     assert again["ok"] and not again["pushed"]
+
+
+# ---------------------------------------------------------------- signed out means no pushes
+class RevokedGH:
+    def __init__(self):
+        self.signed_out = False
+
+    def token(self):
+        return None if self.signed_out else "ghu_" + "z" * 36
+
+    def sign_out(self):
+        self.signed_out = True
+
+
+def _connected_cfg(src):
+    from lifeboat.config import parse
+    return parse({"jobs": [{"name": "d", "source": "/x", "dest": "a:b", "old": "a:c"}],
+                  "store": {"source": str(src), "push": True, "github": True}})
+
+
+def test_a_store_connected_through_lifeboat_never_pushes_without_a_lifeboat_token(source, tmp_path):
+    (source / "a.md").write_text("# new\n")
+    log = tmp_path / "ss.log"
+    cfg = _connected_cfg(source)
+    assert cfg.store_github is True
+    r = store.run_daily(cfg, gh=NoToken(), binary=_skillshare_push(tmp_path, log))
+    assert r["ok"] is False and r["pushed"] is False and r["signed_out"] == "Signed out: sign in to push"
+    assert not log.exists() and store.git_state(source)["dirty_count"] == 1  # no skillshare push, nothing committed either
+    p = next(p for p in store.engine.problems(cfg, engine_status(cfg)) if p["page"] == "store")
+    assert "Signed out" in p["title"] and "Sign in" in p["body"]
+
+
+def test_a_rejected_token_signs_out_with_the_reason_access_was_revoked(source, tmp_path, monkeypatch):
+    (source / "a.md").write_text("# new\n")
+    monkeypatch.setattr(store.github, "push", lambda *a, **kw: {"ok": False, "error": "fatal: unable to access: The requested URL returned error: 403"})
+    gh = RevokedGH()
+    r = store.run_daily(_connected_cfg(source), gh=gh)
+    assert r["ok"] is False and r["signed_out"] == "GitHub access was revoked" and gh.signed_out is True
+
+
+def test_a_failed_push_that_is_not_an_auth_error_stays_signed_in(source, tmp_path, monkeypatch):
+    (source / "a.md").write_text("# new\n")
+    monkeypatch.setattr(store.github, "push", lambda *a, **kw: {"ok": False, "error": "could not resolve host"})
+    gh = RevokedGH()
+    r = store.run_daily(_connected_cfg(source), gh=gh)
+    assert r["ok"] is False and not r.get("signed_out") and gh.signed_out is False
+
+
+def test_a_store_not_connected_through_lifeboat_still_falls_back_to_skillshare(source, tmp_path):
+    (source / "a.md").write_text("# new\n")
+    log = tmp_path / "ss.log"
+    r = store.run_daily(_cfg(source), gh=NoToken(), binary=_skillshare_push(tmp_path, log))
+    assert r["ok"] and log.exists()

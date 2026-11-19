@@ -626,6 +626,10 @@ def _store_problems(last: dict | None) -> list[dict]:
     if last.get("blocked_findings"):
         return [{"page": "store", "title": "Config store push blocked: secret found in " + last["blocked_findings"][0]["file"], "urgent": True,
                  "body": _blocked_body(last)}]
+    if last.get("signed_out"):
+        return [{"page": "store", "title": "Config store: " + last["signed_out"].lower() if last["signed_out"].startswith("GitHub") else
+                 "Config store: " + last["signed_out"], "urgent": True,
+                 "body": "Nothing was pushed. Sign in again on the Config store page."}]
     days = int(age_days(last.get("last_ok_time") or last.get("time")) or 0)
     title = f"Config store not pushed for {days} days" if days else "Config store push failed"
     return [{"page": "store", "title": title, "body": last.get("error") or "The last push did not complete.", "urgent": days >= STALE_DAYS}]

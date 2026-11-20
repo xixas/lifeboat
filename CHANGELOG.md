@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.1](https://github.com/xixas/lifeboat/compare/v0.6.0...v0.6.1) (2026-11-20)
+
+
+### Bug Fixes
+
+* **store:** commit only skill folders on the daily push, never the rest of the repo ([59a9feb](https://github.com/xixas/lifeboat/commit/59a9feb70079947cd370f8ac0e3e0b6b08ff7bc2))
+
 ## [0.6.0](https://github.com/xixas/lifeboat/compare/v0.5.0...v0.6.0) (2026-11-19)
 
 

@@ -27,7 +27,7 @@ Install the skill (copy `skills/lifeboat` to `~/.claude/skills/`, or `npx skills
 | `lifeboat scan` | What on this laptop could be backed up | `{items: [{key, label, group, path, kind, secret, default_on, exclude, links, ignored, link_count?}]}` |
 | `lifeboat ignore KEY` / `unignore KEY [--dry-run]` | Hide or unhide a scan item (`[scan] ignore`) | `{ignored or unignored, config_path, dry_run}` |
 | `lifeboat prune` | Delete old versions past `keep_days` | the prune result |
-| `lifeboat store-push` | Scan and push the config store (the skills repo) | `{time, ok, pushed, blocked_findings: [{file, line, rule, commit?}], error, signed_out}`. Exit 1 if not ok |
+| `lifeboat store-push` | Scan and push the config store (the skills repo) | `{time, ok, pushed, blocked_findings: [{file, line, rule, commit?}], error, signed_out, left_alone?}` (`left_alone`: changed files outside skill folders, never committed). Exit 1 if not ok |
 
 - **JSON:** with `--json`, stdout is exactly one JSON document. Progress and rclone output go to stderr.
 - **Exit codes:** `0` ok. `1` the operation ran and failed, or something is not ok. `2` config or usage error (message on stderr).

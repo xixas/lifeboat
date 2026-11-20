@@ -202,7 +202,7 @@ def test_daily_push_blocks_on_secret_and_does_not_push(source, tmp_path):
 
 
 def test_daily_push_fails_closed_when_the_secret_scanner_is_unavailable(source, tmp_path, monkeypatch):
-    (source / "a.md").write_text("# fine\n")
+    _skill(source, "skills/a", "# fine\n")
     monkeypatch.setattr(store.store_install, "gitleaks_path", lambda: None)
     pushed = []
     monkeypatch.setattr(store.github, "push", lambda *a, **kw: pushed.append(a) or {"ok": True, "error": ""})
@@ -236,7 +236,7 @@ def test_a_configured_store_never_pushes_without_a_lifeboat_token(source, tmp_pa
 
 
 def test_a_successful_push_records_what_lifeboat_pushed(source, tmp_path, monkeypatch):
-    (source / "a.md").write_text("# fine\n")
+    _skill(source, "skills/a", "# fine\n")
     monkeypatch.setattr(store.github, "push", lambda *a, **kw: {"ok": True, "error": ""})
     r = store.run_daily(_cfg(source), gh=Token())
     assert r["pushed"]
@@ -244,14 +244,14 @@ def test_a_successful_push_records_what_lifeboat_pushed(source, tmp_path, monkey
 
 
 def test_a_failed_push_records_nothing(source, tmp_path, monkeypatch):
-    (source / "a.md").write_text("# fine\n")
+    _skill(source, "skills/a", "# fine\n")
     monkeypatch.setattr(store.github, "push", lambda *a, **kw: {"ok": False, "error": "no"})
     store.run_daily(_cfg(source), gh=Token())
     assert not _git(source, "for-each-ref", "refs/lifeboat/pushed")
 
 
 def test_daily_push_with_lifeboat_token_uses_git_push(source, tmp_path, monkeypatch):
-    (source / "a.md").write_text("# fine\n")
+    _skill(source, "skills/a", "# fine\n")
     pushed = []
     monkeypatch.setattr(store.github, "push", lambda path, token, full_name, **kw: pushed.append((str(path), token, full_name)) or {"ok": True, "error": ""})
     r = store.run_daily(_cfg(source), gh=Token())
@@ -266,7 +266,7 @@ def test_daily_push_nothing_to_push(source, tmp_path):
 
 
 def test_daily_push_failure_recorded(source, tmp_path, monkeypatch):
-    (source / "a.md").write_text("ok\n")
+    _skill(source, "skills/a", "ok\n")
     monkeypatch.setattr(store.github, "push", lambda *a, **kw: {"ok": False, "error": "no remote"})
     r = store.run_daily(_cfg(source), gh=Token())
     assert r["ok"] is False and "no remote" in r["error"]
@@ -308,7 +308,7 @@ def test_run_backup_pushes_the_store_after_the_jobs(source, tmp_path, make_cfg, 
     from lifeboat import engine
     (tmp_path / "src").mkdir(exist_ok=True)
     (tmp_path / "src" / "f.txt").write_text("data")
-    (source / "a.md").write_text("fine\n")
+    _skill(source, "skills/a", "fine\n")
     calls = []
     monkeypatch.setattr(store, "run_daily", lambda cfg: calls.append("daily") or {"ok": True, "pushed": True, "blocked_findings": [], "error": ""})
     cfg = make_cfg(store={"source": str(source), "push": True})
@@ -475,7 +475,7 @@ class RevokedGH:
 
 
 def test_the_signed_out_store_raises_a_problem_on_the_store_page(source, tmp_path):
-    (source / "a.md").write_text("# new\n")
+    _skill(source, "skills/a", "# new\n")
     cfg = _cfg(source)
     store.run_daily(cfg, gh=NoToken())
     p = next(p for p in store.engine.problems(cfg, engine_status(cfg)) if p["page"] == "store")
@@ -483,7 +483,7 @@ def test_the_signed_out_store_raises_a_problem_on_the_store_page(source, tmp_pat
 
 
 def test_a_rejected_token_signs_out_with_the_reason_access_was_revoked(source, tmp_path, monkeypatch):
-    (source / "a.md").write_text("# new\n")
+    _skill(source, "skills/a", "# new\n")
     monkeypatch.setattr(store.github, "push", lambda *a, **kw: {"ok": False, "error": "fatal: unable to access: The requested URL returned error: 403"})
     gh = RevokedGH()
     r = store.run_daily(_cfg(source), gh=gh)
@@ -491,7 +491,7 @@ def test_a_rejected_token_signs_out_with_the_reason_access_was_revoked(source, t
 
 
 def test_a_failed_push_that_is_not_an_auth_error_stays_signed_in(source, tmp_path, monkeypatch):
-    (source / "a.md").write_text("# new\n")
+    _skill(source, "skills/a", "# new\n")
     monkeypatch.setattr(store.github, "push", lambda *a, **kw: {"ok": False, "error": "could not resolve host"})
     gh = RevokedGH()
     r = store.run_daily(_cfg(source), gh=gh)
@@ -527,7 +527,7 @@ def test_a_store_whose_remote_is_not_the_confirmed_github_repo_is_refused(source
         _git(source, "remote", "set-url", "origin", origin)
     else:
         _git(source, "remote", "remove", "origin")
-    (source / "a.md").write_text("# new\n")
+    _skill(source, "skills/a", "# new\n")
     calls = []
     monkeypatch.setattr(store.github, "push", lambda *a, **kw: calls.append(a) or {"ok": True, "error": ""})
     r = store.run_daily(_cfg(source), gh=Token())
@@ -537,7 +537,7 @@ def test_a_store_whose_remote_is_not_the_confirmed_github_repo_is_refused(source
 
 def test_an_ssh_origin_of_the_confirmed_repo_still_pushes_to_the_https_url(source, tmp_path):
     _git(source, "remote", "set-url", "origin", "git@github.com:me/store.git")
-    (source / "a.md").write_text("# new\n")
+    _skill(source, "skills/a", "# new\n")
     r = store.run_daily(_cfg(source), gh=Token())
     assert r["ok"] and r["pushed"], r
     assert _git(tmp_path / "hub" / "me" / "store.git", "log", "-1", "--format=%s", "main").strip() == "Update skills"
@@ -628,3 +628,191 @@ def test_a_network_failure_reads_as_a_sentence_and_other_errors_pass_through():
     assert store.engine.upload_error_text("could not reach github.com") == "Could not reach GitHub. Lifeboat retries after the next backup."
     assert store.engine.upload_error_text("the store is not on a branch (detached HEAD)") == "the store is not on a branch (detached HEAD)"
     assert store.engine.upload_error_text("") == "The last upload did not complete."
+
+
+# ---------------------------------------------------------------- what the daily push commits: skill folders only
+def _skill(src, rel, text="# fine\n"):
+    p = src / rel / "SKILL.md"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(text)
+
+
+def _committed(src):
+    return set(_git(src, "show", "--no-renames", "--name-only", "--format=", "HEAD").split())
+
+
+def _ok_push(monkeypatch):
+    monkeypatch.setattr(store.github, "push", lambda *a, **kw: {"ok": True, "error": ""})
+
+
+def test_the_daily_push_commits_skill_folders_and_leaves_other_files_alone(source, monkeypatch):
+    _ok_push(monkeypatch)
+    _skill(source, "skills/pickup")
+    (source / "docs").mkdir()
+    (source / "docs" / "plan.html").write_text("<p>wip</p>\n")
+    r = store.run_daily(_cfg(source), gh=Token())
+    assert r["ok"] and r["pushed"]
+    assert _committed(source) == {"skills/pickup/SKILL.md"}
+    assert _git(source, "status", "--porcelain").strip() == "?? docs/"
+    assert r["left_alone"] == 1
+
+
+def _pushed_skill(source, monkeypatch, rel="skills/old"):
+    _ok_push(monkeypatch)
+    _skill(source, rel)
+    store.run_daily(_cfg(source), gh=Token())
+    assert _git(source, "status", "--porcelain").strip() == ""
+
+
+def test_a_deleted_skill_is_committed_as_deleted(source, monkeypatch):
+    _pushed_skill(source, monkeypatch)
+    import shutil
+    shutil.rmtree(source / "skills" / "old")
+    r = store.run_daily(_cfg(source), gh=Token())
+    assert r["pushed"] and _committed(source) == {"skills/old/SKILL.md"}
+    assert "skills/old/SKILL.md" not in _git(source, "ls-files")
+
+
+def test_a_renamed_skill_commits_both_the_old_and_new_path(source, monkeypatch):
+    _pushed_skill(source, monkeypatch)
+    (source / "skills" / "old").rename(source / "skills" / "new")
+    store.run_daily(_cfg(source), gh=Token())
+    assert _committed(source) == {"skills/old/SKILL.md", "skills/new/SKILL.md"}
+    assert _git(source, "status", "--porcelain").strip() == ""
+
+
+def test_a_file_the_user_staged_by_hand_stays_staged_and_out_of_the_commit(source, monkeypatch):
+    _ok_push(monkeypatch)
+    _skill(source, "skills/a")
+    (source / "notes.md").write_text("mine\n")
+    _git(source, "add", "notes.md")
+    r = store.run_daily(_cfg(source), gh=Token())
+    assert r["pushed"] and _committed(source) == {"skills/a/SKILL.md"}
+    assert _git(source, "status", "--porcelain").strip() == "A  notes.md"
+
+
+def test_only_non_skill_changes_commit_nothing_and_still_report_ok(source, monkeypatch):
+    pushed = []
+    monkeypatch.setattr(store.github, "push", lambda *a, **kw: pushed.append(a) or {"ok": True, "error": ""})
+    head = _git(source, "rev-parse", "HEAD")
+    (source / "README.md").write_text("edited\n")
+    r = store.run_daily(_cfg(source), gh=Token())
+    assert r["ok"] is True and r["pushed"] is False and r["left_alone"] == 1
+    assert pushed == [] and _git(source, "rev-parse", "HEAD") == head
+
+
+def test_a_skill_md_inside_a_skill_belongs_to_that_skill(source, monkeypatch):
+    _ok_push(monkeypatch)
+    _skill(source, "skills/a")
+    _skill(source, "skills/a/example/fixture")
+    (source / "skills" / "a" / "tool.py").write_text("x = 1\n")
+    store.run_daily(_cfg(source), gh=Token())
+    assert _committed(source) == {"skills/a/SKILL.md", "skills/a/example/fixture/SKILL.md", "skills/a/tool.py"}
+
+
+def test_skills_at_the_repo_root_and_skillshare_metadata_are_committed(source, monkeypatch):
+    _ok_push(monkeypatch)
+    _skill(source, "pickup")
+    (source / ".metadata.json").write_text("{}\n")
+    (source / "scratch.txt").write_text("x\n")
+    store.run_daily(_cfg(source), gh=Token())
+    assert _committed(source) == {"pickup/SKILL.md", ".metadata.json"}
+
+
+def test_the_page_counts_only_skill_changes_as_waiting_and_names_the_rest():
+    from lifeboat.app.store_page import _waiting_text
+    assert _waiting_text({"ahead": 1, "skills_dirty": 1, "other_dirty": 3}) == "2 changes · 3 other files left alone"
+    assert _waiting_text({"ahead": 0, "skills_dirty": 0, "other_dirty": 1}) == "Nothing waiting · 1 other file left alone"
+    assert _waiting_text({"ahead": 0, "skills_dirty": 0, "other_dirty": 0}) == "Nothing waiting"
+
+
+def test_a_skill_md_at_the_repo_root_does_not_make_the_whole_repo_a_skill(source, monkeypatch):
+    _ok_push(monkeypatch)
+    _skill(source, ".")
+    _skill(source, "skills/a")
+    (source / "notes.md").write_text("x\n")
+    store.run_daily(_cfg(source), gh=Token())
+    assert _committed(source) == {"skills/a/SKILL.md"}
+
+
+def test_gitignored_skills_and_metadata_never_break_the_commit(source, monkeypatch):
+    _ok_push(monkeypatch)
+    (source / ".gitignore").write_text("node_modules/\n.metadata.json\n")
+    _skill(source, "node_modules/pkg")
+    (source / ".metadata.json").write_text("{}\n")
+    _skill(source, "skills/a")
+    r = store.run_daily(_cfg(source), gh=Token())
+    assert r["ok"] and r["pushed"] and _committed(source) == {"skills/a/SKILL.md"}
+
+
+def test_counts_agree_when_git_would_collapse_an_untracked_folder(source):
+    _skill(source, "skills/a")
+    _skill(source, "skills/b")
+    (source / "docs").mkdir()
+    _skill(source, "docs/c")
+    (source / "docs" / "plan.html").write_text("x\n")
+    assert store.change_counts(source) == (3, 1)
+
+
+def test_a_deleted_skill_with_a_non_ascii_name_is_committed(source, monkeypatch):
+    _pushed_skill(source, monkeypatch, "skills/café")
+    import shutil
+    shutil.rmtree(source / "skills" / "café")
+    store.run_daily(_cfg(source), gh=Token())
+    assert _git(source, "status", "--porcelain").strip() == ""
+
+
+def test_a_skill_deleted_with_git_rm_is_committed(source, monkeypatch):
+    _pushed_skill(source, monkeypatch)
+    _git(source, "rm", "-rq", "skills/old")
+    r = store.run_daily(_cfg(source), gh=Token())
+    assert r["ok"] and r["pushed"] and _git(source, "status", "--porcelain").strip() == ""
+
+
+def test_a_skill_renamed_with_git_mv_is_committed(source, monkeypatch):
+    _pushed_skill(source, monkeypatch)
+    _git(source, "mv", "skills/old", "skills/new")
+    r = store.run_daily(_cfg(source), gh=Token())
+    assert r["ok"] and _committed(source) == {"skills/old/SKILL.md", "skills/new/SKILL.md"}
+
+
+def test_a_tracked_skill_that_is_now_gitignored_still_commits(source, monkeypatch):
+    _pushed_skill(source, monkeypatch)
+    (source / ".gitignore").write_text("skills/\n")
+    _skill(source, "skills/old", "# edited\n")
+    r = store.run_daily(_cfg(source), gh=Token())
+    assert r["ok"] and r["pushed"] and _committed(source) == {"skills/old/SKILL.md"}
+
+
+@pytest.mark.parametrize("marker", ["MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD"])
+def test_an_unfinished_git_operation_is_named_and_nothing_is_staged(source, monkeypatch, marker):
+    _ok_push(monkeypatch)
+    _skill(source, "skills/a")
+    (source / ".git" / marker).write_text(_git(source, "rev-parse", "HEAD"))
+    r = store.run_daily(_cfg(source), gh=Token())
+    assert r["ok"] is False and "unfinished" in r["error"]
+    assert _git(source, "diff", "--cached", "--name-only").strip() == ""
+
+
+def test_a_git_clone_inside_a_skill_is_skipped_not_a_daily_failure(source, monkeypatch):
+    _ok_push(monkeypatch)
+    _skill(source, "skills/a")
+    nested = source / "skills" / "a" / "vendor"
+    nested.mkdir()
+    _git(nested, "init", "-q")
+    r = store.run_daily(_cfg(source), gh=Token())
+    assert r["ok"] and r["pushed"] and _committed(source) == {"skills/a/SKILL.md"}
+    assert store.change_counts(source) == (0, 0)
+
+
+def test_a_merge_conflict_in_a_skill_is_refused_and_never_committed(source, monkeypatch):
+    _pushed_skill(source, monkeypatch, "skills/a")
+    _skill(source, "skills/a", "mine\n")
+    _git(source, "stash", "-q")
+    _skill(source, "skills/a", "theirs\n")
+    _git(source, "commit", "-qam", "theirs")
+    subprocess.run(["git", "-C", str(source), "stash", "pop", "-q"], capture_output=True)  # conflicts, no MERGE_HEAD
+    head = _git(source, "rev-parse", "HEAD")
+    r = store.run_daily(_cfg(source), gh=Token())
+    assert r["ok"] is False and "conflict" in r["error"]
+    assert _git(source, "rev-parse", "HEAD") == head

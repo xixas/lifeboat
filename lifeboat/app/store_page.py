@@ -26,7 +26,10 @@ def gather_store(cfg) -> dict:
     """What the Skills on GitHub page shows; runs off the main thread. Touches the keyring only once a store is set up."""
     if not (cfg.store_source and cfg.store_push):
         return {"set_up": False}
-    return {"set_up": True, "git": store.git_state(os.path.expanduser(cfg.store_source)), "signed_in": GITHUB().signed_in()}
+    repo = os.path.expanduser(cfg.store_source)
+    skills, other = store.change_counts(Path(repo))
+    git = {**store.git_state(repo), "skills_dirty": skills, "other_dirty": other}
+    return {"set_up": True, "git": git, "signed_in": GITHUB().signed_in()}
 
 
 def _upload_text(last):
@@ -41,8 +44,10 @@ def _upload_text(last):
 
 
 def _waiting_text(git):
-    n = git["ahead"] + git["dirty_count"]  # unsent commits plus files not committed yet
-    return f"{n} change{'s' if n != 1 else ''}" if n else "Nothing waiting"
+    n = git["ahead"] + git["skills_dirty"]  # unsent commits plus skill files not committed yet
+    text = f"{n} change{'s' if n != 1 else ''}" if n else "Nothing waiting"
+    other = git["other_dirty"]  # Lifeboat commits only skill folders; say so, without alarm
+    return f"{text} · {other} other file{'s' if other != 1 else ''} left alone" if other else text
 
 
 class StoreMixin:

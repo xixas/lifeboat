@@ -23,7 +23,8 @@ def _git_root(path: Path) -> Path | None:
 
 
 def not_a_repo_root(path: Path | str) -> str | None:
-    """Why `path` cannot be a store: a store is a whole git repo, because `git add -A` and a push cover the whole repo."""
+    """Why `path` cannot be a store: a store is a whole git repo, because a push covers the whole repo (Lifeboat commits only
+    its skill folders, but pushes every commit on the branch)."""
     top = _git_root(Path(path))
     if top and os.path.realpath(top) != os.path.realpath(path):
         return f"{path} is inside the git repo {top}; pick the repo root"
@@ -87,6 +88,72 @@ def _git(path: Path | str, *args: str) -> str | None:
     return r.stdout if r.returncode == 0 else None
 
 
+METADATA = ".metadata.json"  # skillshare's record of skills installed from GitHub, kept at the source root
+
+
+def _names(repo: Path, *args: str) -> list[str]:
+    """NUL-separated path list from git: no C-quoting of non-ASCII names, no surprises with spaces."""
+    return [n for n in (_git(repo, *args) or "").split("\0") if n]
+
+
+def skill_pathspecs(repo: Path) -> list[str]:
+    """What Lifeboat commits: each outermost folder holding a SKILL.md, now or at HEAD (so a deleted skill's removal is
+    committed too), plus skillshare's .metadata.json. Found through git, so ignored folders (node_modules, .venv) never count.
+    A SKILL.md inside a skill (an example, a fixture) is part of that skill."""
+    now = _names(repo, "ls-files", "-z", "--cached", "--others", "--exclude-standard")
+    files = set(now) | set(_names(repo, "ls-tree", "-r", "-z", "--name-only", "HEAD"))
+    found = {os.path.dirname(f) for f in files if os.path.basename(f) == "SKILL.md"}
+    found.discard("")  # a SKILL.md at the repo root would make the whole repo one skill
+    dirs = [d for d in sorted(found) if not any(d.startswith(o + "/") for o in found if o != d)]
+    return [f":(literal){d}" for d in dirs + ([METADATA] if METADATA in files else [])]
+
+
+def _status(repo: Path, specs: list[str] | None = None) -> list[tuple[str, str | None]]:
+    """(path, origin path of a rename or copy) for each changed or untracked file, never a collapsed folder; within `specs`."""
+    entries = _names(repo, "status", "--porcelain", "-z", "--untracked-files=all", *(["--", *specs] if specs else []))
+    out, i = [], 0
+    while i < len(entries):
+        e = entries[i]
+        moved = e[:1] in "RC" or e[1:2] in "RC"
+        if not e.endswith("/"):  # a folder entry is a nested git repo (a clone inside a skill): not Lifeboat's to commit
+            out.append((e[3:], entries[i + 1] if moved and i + 1 < len(entries) else None))
+        i += 2 if moved else 1
+    return out
+
+
+def _changed(repo: Path, specs: list[str] | None = None) -> int:
+    return len(_status(repo, specs))
+
+
+def _changed_paths(repo: Path, specs: list[str]) -> list[str]:
+    return sorted({p for path, origin in _status(repo, specs) for p in (path, origin) if p})
+
+
+def _stage(repo: Path, paths: list[str]) -> bool:
+    """Stage exactly these files as they are on disk (added, changed or gone). update-index, unlike `git add`, neither refuses
+    a path that exists only at HEAD nor one a .gitignore now covers; it only ever sees files git status reported."""
+    try:
+        r = subprocess.run(["git", "-C", str(repo), "update-index", "--add", "--remove", "-z", "--stdin"],
+                           input="\0".join(paths) + "\0", capture_output=True, text=True, timeout=20, check=False)
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return r.returncode == 0
+
+
+def _unfinished_operation(repo: Path) -> bool:
+    for name in ("MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD", "rebase-merge", "rebase-apply"):
+        if (where := _git(repo, "rev-parse", "--git-path", name)) and (repo / where.strip()).exists():
+            return True
+    return False
+
+
+def change_counts(repo: Path) -> tuple[int, int]:
+    """(changed files inside skill folders, other changed files): what the next push commits, and what it leaves alone."""
+    specs = skill_pathspecs(repo)
+    skills = _changed(repo, specs) if specs else 0
+    return skills, _changed(repo) - skills
+
+
 def git_state(path: Path | str) -> dict:
     """{is_repo, branch, remote_url, dirty_count, ahead, behind, last_commit_time}, read straight from git."""
     state = {"is_repo": False, "branch": None, "remote_url": None, "dirty_count": 0, "ahead": 0, "behind": 0, "last_commit_time": None}
@@ -147,10 +214,16 @@ def _push(repo: Path, gh) -> dict:
     name, why = _confirmed_repo(repo, gh)
     if not name:
         return {"ok": False, "error": why}
-    if git_state(repo)["dirty_count"]:
-        for args in (["add", "-A"], ["-c", "user.name=Lifeboat", "-c", "user.email=lifeboat@localhost", "commit", "-qm", "Update skills"]):
-            if _git(repo, *args) is None:
-                return {"ok": False, "error": "could not commit the changes"}
+    if _unfinished_operation(repo):  # a partial commit is refused mid-merge; say why instead of failing every day
+        return {"ok": False, "error": "A git merge, cherry-pick, revert or rebase is unfinished in the skills folder; "
+                                      "finish or abort it, then upload again"}
+    specs = skill_pathspecs(repo)
+    if specs and _names(repo, "ls-files", "-u", "-z", "--", *specs):  # staging would mark the conflict resolved, markers and all
+        return {"ok": False, "error": "A skill has an unresolved git conflict; fix the conflicted files, then upload again"}
+    if specs and _changed(repo, specs):  # only skill folders: other files are the user's (or another tool's) to commit
+        if not _stage(repo, _changed_paths(repo, specs)) or _git(
+                repo, "-c", "user.name=Lifeboat", "-c", "user.email=lifeboat@localhost", "commit", "-qm", "Update skills", "--", *specs) is None:
+            return {"ok": False, "error": "could not commit the changes"}
     branch, sha = git_state(repo)["branch"], (_git(repo, "rev-parse", "HEAD") or "").strip()
     out = github.push(repo, token, name)
     if out["ok"] and branch and sha:  # a push to a URL moves no tracking ref: do it, so ahead/behind and the next scan are right
@@ -213,7 +286,8 @@ def run_daily(cfg: Config, gh=None) -> dict | None:
         result["repo"], result["upstream"] = str(repo), (out or "").strip() or None
         return _record(result)
     never_pushed = before["remote_url"] and before["last_commit_time"] and not _upstream(repo)
-    if not before["dirty_count"] and not before["ahead"] and not never_pushed:
+    changed, result["left_alone"] = change_counts(repo)  # Lifeboat never commits the files it leaves alone
+    if not changed and not before["ahead"] and not never_pushed:
         result["ok"] = True
         return _record(result)
     out = _push(repo, gh or github.GitHub())

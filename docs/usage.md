@@ -91,6 +91,11 @@ gitleaks 8.30.1, each checked against a sha256 built into Lifeboat. A mismatch i
 checkout (it must be the repo root, not a subfolder) or create a new store, sign in with GitHub, and install the Lifeboat GitHub App
 on the repo. Lifeboat pushes with its own token only, to that one repo; never `skillshare push` or `sync`, and never another login on the machine.
 
+Lifeboat commits only skill folders (each folder holding a `SKILL.md`, including its deletions and renames) and skillshare's
+`.metadata.json`, as "Update skills". Every other changed file in the repo (notes, docs, scripts, files you staged yourself) is
+left for you to commit; the page counts them as "other files left alone". The push still sends every commit on the branch. It
+refuses, with a message, while a skill has an unresolved conflict or a merge, cherry-pick, revert or rebase is unfinished.
+
 **The secret scanner.** Before every push Lifeboat scans each commit it is about to push, plus the staged files and the working
 tree (edited and untracked files), with its own pinned gitleaks (never one on `PATH`, and never the repo's own `.gitleaks.toml`).
 Lifeboat's own rules run as a second layer and the findings are merged, e.g. a `"JOPLIN_TOKEN": "..."` or `"api_key": "..."` in an

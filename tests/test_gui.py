@@ -1471,8 +1471,13 @@ shot("66-store-done", dlg.get_child())
 click(dlg.get_child(), "Done")
 pump(timeout=0.5)
 
+(repo / "skills" / "pickup").mkdir(parents=True)  # one new skill to upload, and a note Lifeboat must leave alone
+(repo / "skills" / "pickup" / "SKILL.md").write_text("---\nname: pickup\n---\n")
+(repo / "notes.md").write_text("mine\n")
 win.apply(gather())
 win.show_page("store")
+assert "1 change · 1 other file left alone" in labels(win), labels(win)
+shot("67-store-waiting-left-alone", win.get_content())
 assert "Upload now" in [b.get_label() for b in buttons(win)] and "Sign out" in [b.get_label() for b in buttons(win)]
 assert "Manage skills" in [b.get_label() for b in buttons(win)] and "On GitHub" in labels(win) and "Waiting to upload" in labels(win)
 assert win.dots["overview"].get_icon_name() == "object-select-symbolic"  # nothing is wrong with the upload

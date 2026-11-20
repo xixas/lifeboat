@@ -720,6 +720,7 @@ def test_skills_at_the_repo_root_and_skillshare_metadata_are_committed(source, m
 
 
 def test_the_page_counts_only_skill_changes_as_waiting_and_names_the_rest():
+    pytest.importorskip("gi")
     from lifeboat.app.store_page import _waiting_text
     assert _waiting_text({"ahead": 1, "skills_dirty": 1, "other_dirty": 3}) == "2 changes · 3 other files left alone"
     assert _waiting_text({"ahead": 0, "skills_dirty": 0, "other_dirty": 1}) == "Nothing waiting · 1 other file left alone"

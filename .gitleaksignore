@@ -1,0 +1,6 @@
+# Fake secrets in the secret scanner's own tests (tests/test_secretscan.py), checked not to be real tokens
+08b7f428e1ed9e65f63b12e80249427c5d63e0e0:tests/test_secretscan.py:curl-auth-header:190
+08b7f428e1ed9e65f63b12e80249427c5d63e0e0:tests/test_secretscan.py:generic-api-key:181
+08b7f428e1ed9e65f63b12e80249427c5d63e0e0:tests/test_secretscan.py:generic-api-key:182
+08b7f428e1ed9e65f63b12e80249427c5d63e0e0:tests/test_secretscan.py:generic-api-key:187
+08b7f428e1ed9e65f63b12e80249427c5d63e0e0:tests/test_secretscan.py:generic-api-key:188
